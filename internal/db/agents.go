@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+
 	"github.com/reeinharddd/okit/pkg/models"
 )
 
@@ -52,6 +54,16 @@ func (d *DB) GetAgent(id string) (*models.Agent, error) {
 }
 
 func (d *DB) DeleteAgent(id string) error {
-	_, err := d.Exec(`DELETE FROM agents WHERE id=?`, id)
-	return err
+	res, err := d.Exec(`DELETE FROM agents WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("agent %q not found", id)
+	}
+	return nil
 }
