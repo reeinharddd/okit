@@ -30,23 +30,6 @@ func NewService(params NewServiceParams) *Service {
 	return &Service{db: params.DB}
 }
 
-var knownProviders = []struct {
-	ID        string
-	BaseURL   string
-	CatalogURL string
-	KeyEnv    string
-}{
-	{"groq", "https://api.groq.com/openai/v1", "https://api.groq.com/openai/v1/models", "GROQ_API_KEY"},
-	{"mistral", "https://api.mistral.ai/v1", "https://api.mistral.ai/v1/models", "MISTRAL_API_KEY"},
-	{"nvidia", "https://integrate.api.nvidia.com/v1", "https://integrate.api.nvidia.com/v1/models", "NVIDIA_API_KEY"},
-	{"google", "", "https://generativelanguage.googleapis.com/v1beta/models", "GOOGLE_API_KEY"},
-	{"cerebras", "https://api.cerebras.ai/v1", "https://api.cerebras.ai/public/v1/models", "CEREBRAS_API_KEY"},
-	{"openrouter", "https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/models", "OPENROUTER_API_KEY"},
-	{"github-models", "https://models.github.ai/inference", "https://models.github.ai/catalog/models", "GITHUB_TOKEN"},
-	{"opencode-zen", "https://opencode.ai/zen/v1", "https://opencode.ai/zen/v1/models", "OPENCODE_ZEN_API_KEY"},
-	{"github-copilot", "https://api.githubcopilot.com", "https://api.githubcopilot.com/models", "GITHUB_TOKEN"},
-}
-
 var nonChatKeywords = []string{
 	"embedding", "embed", "moderation", "ocr", "tts", "transcribe",
 	"realtime", "imagen", "veo", "whisper", "speech", "dall-e",
@@ -65,70 +48,80 @@ func isChatModel(id string) bool {
 }
 
 func (s *Service) Discover(ctx context.Context) error {
-	for _, kp := range knownProviders {
-		apiKey := os.Getenv(kp.KeyEnv)
+	providers, err := s.db.ListProviders()
+	if err != nil {
+		return fmt.Errorf("list providers: %w", err)
+	}
+
+	for _, prov := range providers {
+		apiKey := os.Getenv(prov.KeyEnv)
 		if apiKey == "" {
 			continue
 		}
-		entries, err := fetchCatalog(ctx, kp.ID, kp.CatalogURL, apiKey)
-		if err != nil {
-			fmt.Printf("  Warning [%s]: %v\n", kp.ID, err)
+		if prov.CatalogURL == "" {
+			fmt.Printf("  Warning [%s]: no catalog_url set, skipping\n", prov.ID)
 			continue
 		}
-		// Ensure provider exists in DB
+		entries, err := fetchCatalog(ctx, &prov, apiKey)
+		if err != nil {
+			fmt.Printf("  Warning [%s]: %v\n", prov.ID, err)
+			continue
+		}
+		now := time.Now().Unix()
 		_ = s.db.UpsertProvider(&models.Provider{
-			ID:         kp.ID,
-			Name:       kp.ID,
-			BaseURL:    kp.BaseURL,
-			CatalogURL: kp.CatalogURL,
-			KeyEnv:     kp.KeyEnv,
-			Source:     "auto",
+			ID:         prov.ID,
+			Name:       prov.Name,
+			BaseURL:    prov.BaseURL,
+			CatalogURL: prov.CatalogURL,
+			KeyEnv:     prov.KeyEnv,
+			IsFree:     prov.IsFree,
+			Source:     prov.Source,
 			Status:     "active",
-			LastSynced: time.Now().Unix(),
+			Priority:   prov.Priority,
+			LastSynced: now,
 		})
 		count := 0
 		for _, m := range entries {
 			if !isChatModel(m.ID) {
 				continue
 			}
-			if kp.ID == "openrouter" && !strings.HasSuffix(m.ID, ":free") {
-				continue
+			bare := m.ID
+			// Some catalogs include provider name prefix (e.g. "groq/compound").
+			// Avoid double-prefix "groq/groq/compound".
+			prefix := prov.ID + "/"
+			if strings.HasPrefix(bare, prefix) {
+				bare = bare[len(prefix):]
 			}
-			providerID := kp.ID
-			fullID := providerID + "/" + m.ID
-			existing, _ := s.db.ListModelsByProvider(providerID)
-			_ = existing
+			fullID := prov.ID + "/" + bare
 			_ = s.db.UpsertModel(&models.Model{
 				ID:          fullID,
-				ProviderID:  providerID,
-				DisplayName: m.ID,
+				ProviderID:  prov.ID,
+				DisplayName: bare,
 				Source:      "discovered",
 				Status:      "untested",
 			})
 			count++
 		}
-		fmt.Printf("  %s: %d models discovered\n", kp.ID, count)
+		fmt.Printf("  %s: %d models discovered\n", prov.ID, count)
 	}
 	return nil
 }
 
-func fetchCatalog(ctx context.Context, providerID, catalogURL, apiKey string) ([]ModelEntry, error) {
+func fetchCatalog(ctx context.Context, prov *models.Provider, apiKey string) ([]ModelEntry, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", catalogURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", prov.CatalogURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	switch providerID {
-	case "google":
-		req.URL.RawQuery = "key=" + apiKey
-	case "github-models", "github-copilot":
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("User-Agent", "opencode-kit/discover (Go)")
+	req.Header.Set("Accept", "application/json")
+
+	// GitHub models use a different Accept header
+	if prov.ID == "github-models" || prov.ID == "github-copilot" {
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	case "cerebras":
-	default:
-		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := client.Do(req)
@@ -141,48 +134,31 @@ func fetchCatalog(ctx context.Context, providerID, catalogURL, apiKey string) ([
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	var raw json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	var entries []ModelEntry
-	switch providerID {
-	case "google":
-		var result struct {
-			Models []struct {
-				Name string `json:"name"`
-			} `json:"models"`
-		}
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil, err
-		}
-		for _, m := range result.Models {
-			name := strings.TrimPrefix(m.Name, "models/")
-			entries = append(entries, ModelEntry{ID: name, Provider: providerID})
-		}
-	default:
-		var result struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil, err
-		}
-		for _, m := range result.Data {
-			entries = append(entries, ModelEntry{ID: m.ID, Provider: providerID})
-		}
+	entries := make([]ModelEntry, 0, len(result.Data))
+	for _, m := range result.Data {
+		entries = append(entries, ModelEntry{ID: m.ID, Provider: prov.ID})
 	}
-
 	return entries, nil
 }
 
-func DetectAvailableProviders() []string {
+func DetectAvailableProviders(querier interface{ ListProviders() ([]models.Provider, error) }) []string {
+	providers, err := querier.ListProviders()
+	if err != nil {
+		return nil
+	}
 	var out []string
-	for _, kp := range knownProviders {
-		if os.Getenv(kp.KeyEnv) != "" {
-			out = append(out, kp.ID)
+	for _, p := range providers {
+		if os.Getenv(p.KeyEnv) != "" {
+			out = append(out, p.ID)
 		}
 	}
 	return out

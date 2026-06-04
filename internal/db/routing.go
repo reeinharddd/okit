@@ -194,6 +194,24 @@ func (d *DB) SetPreference(key, value string) error {
 	return err
 }
 
+func (d *DB) CleanupProviderPrefs() (int, error) {
+	res, err := d.Exec(`DELETE FROM preferences WHERE key LIKE 'config/provider_%'`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (d *DB) CleanupInvalidPreferences() (int, error) {
+	res, err := d.Exec(`DELETE FROM preferences WHERE value='null' OR value='NULL' OR value='<nil>'`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (d *DB) GetPreference(key string) (string, error) {
 	var val string
 	err := d.QueryRow(`SELECT value FROM preferences WHERE key=?`, key).Scan(&val)

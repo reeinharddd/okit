@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/reeinharddd/okit/internal/db"
 	"github.com/reeinharddd/okit/internal/util"
@@ -54,15 +55,43 @@ func (s *Service) ImportFromOpenCodeConfig(configPath string) (*Diff, error) {
 	if provSection, ok := cfg["provider"].(map[string]interface{}); ok {
 		for provID, provVal := range provSection {
 			if provCfg, ok := provVal.(map[string]interface{}); ok {
-				if !existingMap[provID] {
-					_ = s.db.UpsertProvider(&models.Provider{
-						ID:     provID,
-						Name:   provID,
-						Source: "opencode",
-						Status: "active",
-					})
+				provName, _ := provCfg["name"].(string)
+				if provName == "" {
+					provName = provID
+				}
+				provBaseURL := ""
+				if opts, ok := provCfg["options"].(map[string]interface{}); ok {
+					if bu, _ := opts["baseURL"].(string); bu != "" {
+						provBaseURL = bu
+					}
+				}
+				upserted := !existingMap[provID]
+				p := &models.Provider{
+					ID:      provID,
+					Name:    provName,
+					BaseURL: provBaseURL,
+					Source:  "opencode",
+					Status:  "active",
+				}
+				// Preserve existing KeyEnv — don't wipe what discover set
+				if existing, err := s.db.GetProvider(provID); err == nil && existing.KeyEnv != "" {
+					p.KeyEnv = existing.KeyEnv
+					p.CatalogURL = existing.CatalogURL
+				}
+				_ = s.db.UpsertProvider(p)
+				if upserted {
 					diff.AddedProviders = append(diff.AddedProviders, provID)
 				}
+
+				// Store npm and options as preferences
+				if npm, _ := provCfg["npm"].(string); npm != "" && npm != "null" && npm != "NULL" {
+					_ = s.db.SetPreference("config/provider_npm_"+provID, npm)
+				}
+				if opts, ok := provCfg["options"].(map[string]interface{}); ok && len(opts) > 0 {
+					b, _ := json.Marshal(opts)
+					_ = s.db.SetPreference("config/provider_options_"+provID, string(b))
+				}
+
 				importModels := func(names []string) {
 					for _, name := range names {
 						modelID := provID + "/" + name
@@ -233,23 +262,185 @@ func (s *Service) ExportToOpenCodeConfig(configPath string) error {
 		"$schema": "https://opencode.ai/config.json",
 	}
 
+	prefs, _ := s.db.ListPreferences()
+
+	// ── Providers ─────────────────────────────────────────────────
 	provSection := make(map[string]interface{})
 	for _, p := range providers {
 		providerModels, _ := s.db.ListModelsByProvider(p.ID)
-		var whitelist []string
+		whitelist := make([]string, 0, len(providerModels))
+		modelEntries := make(map[string]interface{})
 		for _, m := range providerModels {
 			if m.Status != "error" && m.DisplayName != "" {
 				whitelist = append(whitelist, m.DisplayName)
+				modelEntries[m.DisplayName] = map[string]interface{}{
+					"name":  m.DisplayName,
+					"limit": map[string]interface{}{"context": 128000, "output": 8192},
+				}
 			}
 		}
+		entry := map[string]interface{}{}
 		if len(whitelist) > 0 {
-			provSection[p.ID] = map[string]interface{}{
-				"whitelist": whitelist,
+			entry["whitelist"] = whitelist
+		}
+		if len(modelEntries) > 0 {
+			entry["models"] = modelEntries
+		}
+		if p.Name != "" {
+			entry["name"] = p.Name
+		}
+		if npm, ok := prefs["config/provider_npm_"+p.ID]; ok && npm != "" && npm != "null" && npm != "NULL" {
+			entry["npm"] = npm
+		}
+		if optsJSON, ok := prefs["config/provider_options_"+p.ID]; ok && optsJSON != "" {
+			var opts map[string]interface{}
+			if json.Unmarshal([]byte(optsJSON), &opts) == nil {
+				entry["options"] = opts
 			}
+		} else if p.BaseURL != "" {
+			entry["options"] = map[string]interface{}{"baseURL": p.BaseURL}
+		}
+		if len(entry) > 0 {
+			provSection[p.ID] = entry
 		}
 	}
 	cfg["provider"] = provSection
 
+	// ── Agents ─────────────────────────────────────────────────────
+	agents, err := s.db.ListAgents()
+	if err == nil && len(agents) > 0 {
+		agentSection := make(map[string]interface{})
+		for _, a := range agents {
+			if a.Status != "active" {
+				continue
+			}
+			entry := map[string]interface{}{}
+			if a.Description != "" {
+				entry["description"] = a.Description
+			}
+			if a.CurrentModelID != "" {
+				entry["model"] = a.CurrentModelID
+			}
+			if a.Mode != "" {
+				entry["mode"] = a.Mode
+			}
+			if a.Temperature > 0 {
+				entry["temperature"] = a.Temperature
+			}
+			if a.Color != "" {
+				entry["color"] = a.Color
+			}
+			if a.MaxSteps > 0 {
+				entry["steps"] = a.MaxSteps
+			}
+			if a.PromptFile != "" {
+				entry["prompt"] = a.PromptFile
+			}
+			if a.Permission != "" {
+				var permMap map[string]interface{}
+				if json.Unmarshal([]byte(a.Permission), &permMap) == nil {
+					entry["permission"] = permMap
+				}
+			}
+			if len(entry) > 0 {
+				agentSection[a.ID] = entry
+			}
+		}
+		if len(agentSection) > 0 {
+			cfg["agent"] = agentSection
+		}
+	}
+
+	// ── Commands ──────────────────────────────────────────────────
+	commands, err := s.db.ListCommands()
+	if err == nil && len(commands) > 0 {
+		cmdSection := make(map[string]interface{})
+		for _, c := range commands {
+			if c.Status != "active" {
+				continue
+			}
+			entry := map[string]interface{}{"template": c.Template}
+			if c.Description != "" {
+				entry["description"] = c.Description
+			}
+			if c.Agent != "" {
+				entry["agent"] = c.Agent
+			}
+			if c.Model != "" {
+				entry["model"] = c.Model
+			}
+			if c.Subtask {
+				entry["subtask"] = true
+			}
+			cmdSection[c.ID] = entry
+		}
+		cfg["command"] = cmdSection
+	}
+
+	// ── MCP ────────────────────────────────────────────────────────
+	mcps, err := s.db.ListMCPs()
+	if err == nil && len(mcps) > 0 {
+		mcpSection := make(map[string]interface{})
+		for _, m := range mcps {
+			entry := map[string]interface{}{}
+			if m.Type == "local" {
+				entry["type"] = "local"
+				if m.Command != "" {
+					var cmdArr []string
+					if json.Unmarshal([]byte(m.Command), &cmdArr) == nil {
+						entry["command"] = cmdArr
+					}
+				}
+			} else if m.Type == "remote" {
+				entry["type"] = "remote"
+				if m.URL != "" {
+					entry["url"] = m.URL
+				}
+			}
+			if m.Enabled {
+				entry["enabled"] = true
+			}
+			if m.Timeout > 0 {
+				entry["timeout"] = m.Timeout
+			}
+			if m.EnvVars != "" {
+				var envObj map[string]interface{}
+				if json.Unmarshal([]byte(m.EnvVars), &envObj) == nil {
+					entry["environment"] = envObj
+				}
+			}
+			if len(entry) > 0 {
+				mcpSection[m.ID] = entry
+			}
+		}
+		cfg["mcp"] = mcpSection
+	}
+
+	// ── Meta preferences ─────────────────────────────────────────
+	for k, v := range prefs {
+		if !strings.HasPrefix(k, metaPref) {
+			continue
+		}
+		stem := k[len(metaPref):]
+		// Skip provider-specific and internal keys
+		if strings.HasPrefix(stem, "provider_") {
+			continue
+		}
+		if strings.HasPrefix(stem, "skills_") {
+			continue
+		}
+		if strings.HasPrefix(stem, "compaction_") {
+			continue
+		}
+		if stem == "lsp" {
+			continue
+		}
+		var val interface{}
+		_ = json.Unmarshal([]byte(v), &val)
+		cfg[stem] = val
+	}
+
+	// ── Write ──────────────────────────────────────────────────────
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

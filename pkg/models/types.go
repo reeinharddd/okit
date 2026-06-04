@@ -1,15 +1,16 @@
 package models
 
 type Provider struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	BaseURL     string `json:"api_base,omitempty"`
-	CatalogURL  string `json:"catalog_url,omitempty"`
-	KeyEnv      string `json:"key_env,omitempty"`
-	Source      string `json:"source"` // auto, opencode, custom
-	Status      string `json:"status"` // active, error, disabled
-	Priority    int    `json:"priority"`
-	LastSynced  int64  `json:"last_synced,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BaseURL    string `json:"api_base,omitempty"`
+	CatalogURL string `json:"catalog_url,omitempty"`
+	KeyEnv     string `json:"key_env,omitempty"`
+	IsFree     bool   `json:"is_free"`     // skip audit, auto-activate models
+	Source     string `json:"source"`      // seed, opencode, custom, auto
+	Status     string `json:"status"`      // active, error, disabled
+	Priority   int    `json:"priority"`
+	LastSynced int64  `json:"last_synced,omitempty"`
 }
 
 type Model struct {

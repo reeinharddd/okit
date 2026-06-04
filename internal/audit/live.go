@@ -7,34 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/reeinharddd/okit/pkg/models"
 )
-
-type ProviderConfig struct {
-	ID         string
-	APIBase    string
-	KeyEnv     string
-	Auth       string // bearer | query
-	ModelPath  string // "data" | "models"
-	StripPrefix string // "models/" for google
-	ChatURL    string
-	IsGoogle   bool
-}
-
-var ProviderConfigs = map[string]ProviderConfig{
-	"groq":         {"groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY", "bearer", "data", "", "https://api.groq.com/openai/v1/chat/completions", false},
-	"cerebras":     {"cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "bearer", "data", "", "https://api.cerebras.ai/v1/chat/completions", false},
-	"openrouter":   {"openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "bearer", "data", "", "https://openrouter.ai/api/v1/chat/completions", false},
-	"opencode-zen": {"opencode-zen", "https://opencode.ai/zen/v1", "OPENCODE_ZEN_API_KEY", "bearer", "data", "", "https://opencode.ai/zen/v1/chat/completions", false},
-	"mistral":      {"mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY", "bearer", "data", "", "https://api.mistral.ai/v1/chat/completions", false},
-	"nvidia":       {"nvidia", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", "bearer", "data", "", "https://integrate.api.nvidia.com/v1/chat/completions", false},
-	"google":       {"google", "https://generativelanguage.googleapis.com/v1beta", "GOOGLE_API_KEY", "query", "models", "models/", "", true},
-}
 
 type LiveProviderResult struct {
 	ProviderID string
@@ -54,11 +32,11 @@ type LiveModelResult struct {
 }
 
 type FixReport struct {
-	ProviderID    string
-	PhantomFixed  int
-	MissingAdded  int
-	Skipped       int
-	FetchError    string
+	ProviderID   string
+	PhantomFixed int
+	MissingAdded int
+	Skipped      int
+	FetchError   string
 }
 
 type LiveReport struct {
@@ -67,9 +45,9 @@ type LiveReport struct {
 }
 
 type Live struct {
-	db       dbReader
-	hc       *http.Client
-	workers  int
+	db      dbReader
+	hc      *http.Client
+	workers int
 }
 
 type dbReader interface {
@@ -89,37 +67,26 @@ func NewLive(db dbReader, workers int) *Live {
 	}
 }
 
-func (l *Live) FetchRealModels(ctx context.Context, provID string) ([]string, error) {
-	cfg, ok := ProviderConfigs[provID]
-	if !ok {
-		return nil, fmt.Errorf("unknown provider: %s", provID)
-	}
-	apiKey := os.Getenv(cfg.KeyEnv)
+func (l *Live) FetchRealModels(ctx context.Context, prov *models.Provider) ([]string, error) {
+	apiKey := os.Getenv(prov.KeyEnv)
 	if apiKey == "" {
-		return nil, fmt.Errorf("missing API key %s", cfg.KeyEnv)
+		return nil, fmt.Errorf("missing API key %s", prov.KeyEnv)
 	}
 
-	listURL := cfg.APIBase + "/models"
-	if cfg.IsGoogle {
-		listURL = cfg.APIBase + "/models"
-	}
+	listURL := strings.TrimRight(prov.BaseURL, "/") + "/models"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", listURL, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("User-Agent", "opencode-kit/audit (Go)")
 	req.Header.Set("Accept", "application/json")
 
-	switch cfg.Auth {
-	case "bearer":
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	case "query":
-		u, _ := url.Parse(listURL)
-		q := u.Query()
-		q.Set("key", apiKey)
-		u.RawQuery = q.Encode()
-		req.URL = u
+	// GitHub models use a different Accept header
+	if prov.ID == "github-models" || prov.ID == "github-copilot" {
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
 
 	resp, err := l.hc.Do(req)
@@ -132,29 +99,18 @@ func (l *Live) FetchRealModels(ctx context.Context, provID string) ([]string, er
 		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, string(body))
 	}
 
-	var raw map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	arr, _ := raw[cfg.ModelPath].([]interface{})
-	ids := make([]string, 0, len(arr))
-	for _, item := range arr {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		mid, _ := m["id"].(string)
-		if mid == "" {
-			mid, _ = m["name"].(string)
-		}
-		if mid == "" {
-			continue
-		}
-		if cfg.StripPrefix != "" && strings.HasPrefix(mid, cfg.StripPrefix) {
-			mid = mid[len(cfg.StripPrefix):]
-		}
-		ids = append(ids, mid)
+	ids := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		ids = append(ids, m.ID)
 	}
 	return ids, nil
 }
@@ -167,12 +123,12 @@ func stripProviderPrefix(provID, mid string) string {
 	return mid
 }
 
-func (l *Live) DiffProvider(ctx context.Context, provID string) (LiveProviderResult, error) {
-	res := LiveProviderResult{ProviderID: provID}
-	real, err := l.FetchRealModels(ctx, provID)
+func (l *Live) DiffProvider(ctx context.Context, prov *models.Provider) (LiveProviderResult, error) {
+	res := LiveProviderResult{ProviderID: prov.ID}
+	real, err := l.FetchRealModels(ctx, prov)
 	if err != nil {
 		res.FetchError = err.Error()
-		dbModels, _ := l.db.ListModelsByProvider(provID)
+		dbModels, _ := l.db.ListModelsByProvider(prov.ID)
 		res.DBCount = len(dbModels)
 		return res, nil
 	}
@@ -181,14 +137,14 @@ func (l *Live) DiffProvider(ctx context.Context, provID string) (LiveProviderRes
 	for _, r := range real {
 		realSet[r] = true
 	}
-	dbModels, err := l.db.ListModelsByProvider(provID)
+	dbModels, err := l.db.ListModelsByProvider(prov.ID)
 	if err != nil {
 		return res, err
 	}
 	res.DBCount = len(dbModels)
 	dbSet := make(map[string]bool, len(dbModels))
 	for _, m := range dbModels {
-		dbSet[stripProviderPrefix(provID, m.ID)] = true
+		dbSet[stripProviderPrefix(prov.ID, m.ID)] = true
 	}
 	for r := range realSet {
 		if !dbSet[r] {
@@ -209,14 +165,15 @@ func (l *Live) DiffAll(ctx context.Context) ([]LiveProviderResult, error) {
 		return nil, err
 	}
 	results := make([]LiveProviderResult, 0, len(providers))
-	for _, p := range providers {
+	for i := range providers {
+		p := &providers[i]
 		if p.Status != "active" {
 			continue
 		}
-		if _, ok := ProviderConfigs[p.ID]; !ok {
+		if p.BaseURL == "" {
 			continue
 		}
-		r, err := l.DiffProvider(ctx, p.ID)
+		r, err := l.DiffProvider(ctx, p)
 		if err != nil {
 			r.FetchError = err.Error()
 		}
@@ -236,15 +193,15 @@ func (l *Live) SmokeAll(ctx context.Context, opts SmokeOpts) ([]LiveModelResult,
 		return nil, err
 	}
 	results := make([]LiveModelResult, 0)
-	for _, p := range providers {
+	for i := range providers {
+		p := &providers[i]
 		if p.Status != "active" {
 			continue
 		}
-		cfg, ok := ProviderConfigs[p.ID]
-		if !ok {
+		if p.BaseURL == "" {
 			continue
 		}
-		apiKey := os.Getenv(cfg.KeyEnv)
+		apiKey := os.Getenv(p.KeyEnv)
 		if apiKey == "" {
 			continue
 		}
@@ -256,18 +213,18 @@ func (l *Live) SmokeAll(ctx context.Context, opts SmokeOpts) ([]LiveModelResult,
 			if m.Status != "active" {
 				continue
 			}
-			r := l.SmokeOne(ctx, cfg, p.ID, m.DisplayName, apiKey)
+			r := l.SmokeOne(ctx, p, m.DisplayName, apiKey)
 			results = append(results, r)
 		}
 	}
 	return results, nil
 }
 
-func (l *Live) SmokeOne(ctx context.Context, cfg ProviderConfig, provID, modelID, apiKey string) LiveModelResult {
-	res := LiveModelResult{ModelID: modelID, Provider: provID}
-	if cfg.IsGoogle {
-		return res
-	}
+func (l *Live) SmokeOne(ctx context.Context, prov *models.Provider, modelID, apiKey string) LiveModelResult {
+	res := LiveModelResult{ModelID: modelID, Provider: prov.ID}
+
+	chatURL := strings.TrimRight(prov.BaseURL, "/") + "/chat/completions"
+
 	bodyMap := map[string]interface{}{
 		"model":    modelID,
 		"messages": []map[string]string{{"role": "user", "content": "OK"}},
@@ -283,7 +240,7 @@ func (l *Live) SmokeOne(ctx context.Context, cfg ProviderConfig, provID, modelID
 		bodyMap["max_tokens"] = 1
 	}
 	body, _ := json.Marshal(bodyMap)
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.ChatURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewReader(body))
 	if err != nil {
 		res.Status = "err"
 		res.ErrorMsg = err.Error()
@@ -346,12 +303,16 @@ func (l *Live) FixAll(ctx context.Context) ([]FixReport, error) {
 		return nil, err
 	}
 	reports := make([]FixReport, 0, len(providers))
-	for _, p := range providers {
+	for i := range providers {
+		p := &providers[i]
 		if p.Status != "active" {
 			continue
 		}
+		if p.BaseURL == "" {
+			continue
+		}
 		rep := FixReport{ProviderID: p.ID}
-		real, fetchErr := l.FetchRealModels(ctx, p.ID)
+		real, fetchErr := l.FetchRealModels(ctx, p)
 		if fetchErr != nil {
 			rep.FetchError = fetchErr.Error()
 			reports = append(reports, rep)
@@ -400,10 +361,6 @@ func (l *Live) FixAll(ctx context.Context) ([]FixReport, error) {
 				rep.Skipped++
 				continue
 			}
-			// Some providers (groq, nvidia) include the provider name in the
-			// catalog ID (e.g. "groq/compound", "nvidia/meta/llama-...").
-			// Avoid the double-prefix "groq/groq/compound" by stripping a
-			// leading provider segment when present.
 			bare := r
 			prefix := p.ID + "/"
 			if strings.HasPrefix(bare, prefix) {

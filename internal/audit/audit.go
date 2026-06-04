@@ -104,7 +104,14 @@ func (s *Service) Run(ctx context.Context, full bool) error {
 func (s *Service) testModel(ctx context.Context, prov models.Provider, m models.Model) models.Model {
 	baseURL := prov.BaseURL
 	if baseURL == "" {
-		baseURL = "https://api." + prov.ID + ".com/v1"
+		return models.Model{
+			ID:         m.ID,
+			ProviderID: prov.ID,
+			Status:     "error",
+			ErrorMessage: "no base_url configured for provider",
+			Source:     "audited",
+			LastTested: time.Now().Unix(),
+		}
 	}
 	apiKey := os.Getenv(prov.KeyEnv)
 	endpoint := strings.TrimRight(baseURL, "/") + "/chat/completions"
@@ -138,9 +145,7 @@ func (s *Service) testModel(ctx context.Context, prov models.Provider, m models.
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if prov.ID != "google" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 
 		start := time.Now()
 		resp, err := client.Do(req)

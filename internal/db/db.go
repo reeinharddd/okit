@@ -12,6 +12,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/reeinharddd/okit/internal/config"
+	"github.com/reeinharddd/okit/pkg/models"
 	_ "modernc.org/sqlite"
 )
 
@@ -93,6 +94,17 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
+var seedProviders = []models.Provider{
+	{ID: "groq", Name: "Groq", BaseURL: "https://api.groq.com/openai/v1", CatalogURL: "https://api.groq.com/openai/v1/models", KeyEnv: "GROQ_API_KEY", Source: "seed", Status: "active", Priority: 10},
+	{ID: "mistral", Name: "Mistral", BaseURL: "https://api.mistral.ai/v1", CatalogURL: "https://api.mistral.ai/v1/models", KeyEnv: "MISTRAL_API_KEY", Source: "seed", Status: "active", Priority: 20},
+	{ID: "nvidia", Name: "NVIDIA", BaseURL: "https://integrate.api.nvidia.com/v1", CatalogURL: "https://integrate.api.nvidia.com/v1/models", KeyEnv: "NVIDIA_API_KEY", Source: "seed", Status: "active", Priority: 30},
+	{ID: "cerebras", Name: "Cerebras", BaseURL: "https://api.cerebras.ai/v1", CatalogURL: "https://api.cerebras.ai/public/v1/models", KeyEnv: "CEREBRAS_API_KEY", Source: "seed", Status: "active", Priority: 40},
+	{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1", CatalogURL: "https://openrouter.ai/api/v1/models", KeyEnv: "OPENROUTER_API_KEY", Source: "seed", Status: "active", Priority: 50},
+	{ID: "github-models", Name: "GitHub Models", BaseURL: "https://models.github.ai/inference", CatalogURL: "https://models.github.ai/catalog/models", KeyEnv: "GITHUB_TOKEN", Source: "seed", Status: "active", Priority: 60},
+	{ID: "opencode-zen", Name: "OpenCode Zen", BaseURL: "https://opencode.ai/zen/v1", CatalogURL: "https://opencode.ai/zen/v1/models", KeyEnv: "OPENCODE_ZEN_API_KEY", Source: "seed", Status: "active", Priority: 70, IsFree: true},
+	{ID: "github-copilot", Name: "GitHub Copilot", BaseURL: "https://api.githubcopilot.com", CatalogURL: "https://api.githubcopilot.com/models", KeyEnv: "GITHUB_TOKEN", Source: "seed", Status: "active", Priority: 80},
+}
+
 func (d *DB) SeedDefaults() error {
 	_, err := d.Exec(`INSERT OR IGNORE INTO budget_config (id, daily_global_usd, preferred_tier) VALUES ('default', 0.50, 'free_only')`)
 	if err != nil {
@@ -107,6 +119,11 @@ func (d *DB) SeedDefaults() error {
 		('fastest', 'Simple tasks, maximum speed', 0, 0, 0, 0, '', 0)`)
 	if err != nil {
 		return fmt.Errorf("seed routing rules: %w", err)
+	}
+	for _, p := range seedProviders {
+		if err := d.UpsertProvider(&p); err != nil {
+			return fmt.Errorf("seed provider %s: %w", p.ID, err)
+		}
 	}
 	return nil
 }

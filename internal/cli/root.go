@@ -44,6 +44,7 @@ audits capabilities, generates optimal config, and auto-heals issues.
 			if cmd.Name() == "help" || cmd.Name() == "completion" {
 				return nil
 			}
+			_ = LoadEnvFile()
 			return nil
 		},
 	}
@@ -229,8 +230,22 @@ func newDailyCmd(dbPath *string) *cobra.Command {
 				fmt.Printf("  Warning: discover: %v\n", err)
 			}
 
-			// 2b. Live audit + fix drift (real /v1/models vs DB)
-			fmt.Println("[2b/9] Live audit (real catalog vs DB) + auto-fix drift...")
+			// 2a. Clean up stale preferences
+			if cleaned, err := d.CleanupInvalidPreferences(); err == nil && cleaned > 0 {
+				fmt.Printf("  Cleaned %d invalid preference values\n", cleaned)
+			}
+			if cleaned, err := d.CleanupProviderPrefs(); err == nil && cleaned > 0 {
+				fmt.Printf("  Cleaned %d flat provider_* preferences\n", cleaned)
+			}
+
+			// 2b. Deduplicate providers with same base URL
+			fmt.Println("[2b/9] Deduplicating providers with same base URL...")
+			if err := dis.DeduplicateProviders(); err != nil {
+				fmt.Printf("  Warning: dedup: %v\n", err)
+			}
+
+			// 2c. Live audit + fix drift (real /v1/models vs DB)
+			fmt.Println("[2c/9] Live audit (real catalog vs DB) + auto-fix drift...")
 			live := audit.NewLive(d, 4)
 			fixes, err := live.FixAll(cmd.Context())
 			if err != nil {
@@ -253,6 +268,12 @@ func newDailyCmd(dbPath *string) *cobra.Command {
 			aud := audit.New(d, 5)
 			if err := aud.Run(cmd.Context(), full); err != nil {
 				fmt.Printf("  Warning: audit: %v\n", err)
+			}
+
+			// 3b. Activate untested models from known free providers
+			fmt.Println("[3b/9] Activating untested free models...")
+			if err := dis.ActivateUntestedFreeModels(); err != nil {
+				fmt.Printf("  Warning: activate: %v\n", err)
 			}
 
 			// 4. Generate

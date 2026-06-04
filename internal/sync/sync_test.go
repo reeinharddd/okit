@@ -66,8 +66,9 @@ func TestImportFromOpenCodeConfig_WithAllSections(t *testing.T) {
 		t.Fatalf("import: %v", err)
 	}
 
-	if len(diff.AddedProviders) != 1 || diff.AddedProviders[0] != "groq" {
-		t.Errorf("providers: want [groq], got %v", diff.AddedProviders)
+	// groq is already seeded, import should not report it as added
+	if len(diff.AddedProviders) != 0 {
+		t.Errorf("providers: want [], got %v", diff.AddedProviders)
 	}
 	if len(diff.AddedAgents) != 1 || diff.AddedAgents[0] != "build" {
 		t.Errorf("agents: want [build], got %v", diff.AddedAgents)
@@ -134,10 +135,17 @@ func TestImportFromOpenCodeConfig_WithAllSections(t *testing.T) {
 		}
 	}
 
-	// Verify provider usage
+	// Verify provider usage — groq exists among seeded providers
 	providers, _ := d.ListProviders()
-	if len(providers) != 1 || providers[0].ID != "groq" {
-		t.Errorf("provider not imported: %v", providers)
+	found := false
+	for _, p := range providers {
+		if p.ID == "groq" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("provider groq not found among: %v", providers)
 	}
 
 	// Verify model profile usage

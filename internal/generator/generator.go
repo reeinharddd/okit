@@ -104,6 +104,117 @@ func (s *Service) SyncExistingToDB() error {
 		return nil
 	}
 
+	existingProviders, _ := s.db.ListProviders()
+
+	// Index existing by base URL (skip empty base URLs)
+	byBaseURL := make(map[string]string) // baseURL → provider ID
+	for _, p := range existingProviders {
+		if p.BaseURL != "" {
+			byBaseURL[p.BaseURL] = p.ID
+		}
+	}
+
+	syncAgents := func() {
+		agentSection, ok := cfg["agent"].(map[string]interface{})
+		if !ok {
+			return
+		}
+		for agentID, agentVal := range agentSection {
+			agentMap, ok := agentVal.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			model, _ := agentMap["model"].(string)
+			desc, _ := agentMap["description"].(string)
+			mode, _ := agentMap["mode"].(string)
+			modeVal := mode
+			if modeVal == "" {
+				modeVal = "subagent"
+			}
+			t, _ := agentMap["temperature"].(float64)
+			color, _ := agentMap["color"].(string)
+			steps, _ := agentMap["steps"].(float64)
+			promptFile, _ := agentMap["prompt"].(string)
+
+			var permBytes []byte
+			if perm, ok := agentMap["permission"]; ok {
+				permBytes, _ = json.Marshal(perm)
+			}
+
+			_ = s.db.UpsertAgent(&models.Agent{
+				ID:             agentID,
+				Description:    desc,
+				CurrentModelID: model,
+				Mode:           modeVal,
+				Temperature:    t,
+				Color:          color,
+				MaxSteps:       int(steps),
+				PromptFile:     promptFile,
+				Permission:     string(permBytes),
+				Source:         "opencode",
+				Status:         "active",
+			})
+		}
+	}
+
+	syncProviders := func() {
+		provSection, ok := cfg["provider"].(map[string]interface{})
+		if !ok {
+			return
+		}
+		for provID, provVal := range provSection {
+			provCfg, ok := provVal.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			// Read config entry
+			name, _ := provCfg["name"].(string)
+			p := models.Provider{
+				ID:     provID,
+				Name:   name,
+				Source: "opencode",
+				Status: "active",
+			}
+			if opts, ok := provCfg["options"].(map[string]interface{}); ok {
+				if bu, _ := opts["baseURL"].(string); bu != "" {
+					p.BaseURL = bu
+				}
+			}
+
+			// If this config entry's base URL matches an existing provider with a
+			// different ID (e.g. config has "opencode", seed has "opencode-zen"),
+			// merge into the existing one instead of creating a duplicate.
+			if p.BaseURL != "" {
+				if existingID, ok := byBaseURL[p.BaseURL]; ok && existingID != provID {
+					if existing, err := s.db.GetProvider(existingID); err == nil {
+						p.ID = existingID
+						if p.Name == "" {
+							p.Name = existing.Name
+						}
+						if existing.KeyEnv != "" {
+							p.KeyEnv = existing.KeyEnv
+							p.CatalogURL = existing.CatalogURL
+						}
+						// Merge any config-provided fields into the existing record
+						if name != "" {
+							p.Name = name
+						}
+						_ = s.db.UpsertProvider(&p)
+						continue
+					}
+				}
+			}
+
+			// Preserve existing KeyEnv — don't wipe what discover set
+			if existing, err := s.db.GetProvider(provID); err == nil && existing.KeyEnv != "" {
+				p.KeyEnv = existing.KeyEnv
+				p.CatalogURL = existing.CatalogURL
+			}
+			_ = s.db.UpsertProvider(&p)
+		}
+	}
+
 	syncMCP := func() {
 		mcpRaw, ok := cfg["mcp"].(map[string]interface{})
 		if !ok {
@@ -125,137 +236,106 @@ func (s *Service) SyncExistingToDB() error {
 			if u, _ := entry["url"].(string); u != "" {
 				m.URL = u
 			}
-			if en, _ := entry["enabled"].(bool); en {
-				m.Enabled = true
-			}
-			if env, _ := entry["environment"].(map[string]interface{}); len(env) > 0 {
-				b, _ := json.Marshal(env)
+			if e, _ := entry["env"].(map[string]interface{}); len(e) > 0 {
+				b, _ := json.Marshal(e)
 				m.EnvVars = string(b)
 			}
-			if to, _ := entry["timeout"].(float64); to > 0 {
-				m.Timeout = int(to)
+			if enabled, _ := entry["enabled"].(bool); enabled {
+				m.Enabled = true
+			}
+			if timeout, _ := entry["timeout"].(float64); timeout > 0 {
+				m.Timeout = int(timeout)
 			}
 			_ = s.db.UpsertMCP(&m)
 		}
 	}
 
 	syncCommands := func() {
-		cmdsRaw, ok := cfg["command"].(map[string]interface{})
+		cmdSection, ok := cfg["command"].(map[string]interface{})
 		if !ok {
 			return
 		}
-		for id, val := range cmdsRaw {
-			entry, ok := val.(map[string]interface{})
+		for cmdID, cmdVal := range cmdSection {
+			cmdMap, ok := cmdVal.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			c := models.Command{ID: id, Source: "sync", Status: "active"}
-			if t, _ := entry["template"].(string); t != "" {
-				c.Template = t
+			template, _ := cmdMap["template"].(string)
+			desc, _ := cmdMap["description"].(string)
+			agent, _ := cmdMap["agent"].(string)
+			model, _ := cmdMap["model"].(string)
+
+			isSubtask := false
+			if v, ok := cmdMap["subtask"]; ok {
+				isSubtask = v.(bool)
 			}
-			if desc, _ := entry["description"].(string); desc != "" {
-				c.Description = desc
-			}
-			if ag, _ := entry["agent"].(string); ag != "" {
-				c.Agent = ag
-			}
-			if mod, _ := entry["model"].(string); mod != "" {
-				c.Model = mod
-			}
-			if st, _ := entry["subtask"].(bool); st {
-				c.Subtask = st
-			}
-			_ = s.db.UpsertCommand(&c)
+
+			_ = s.db.UpsertCommand(&models.Command{
+				ID:          cmdID,
+				Template:    template,
+				Description: desc,
+				Agent:       agent,
+				Model:       model,
+				Subtask:     isSubtask,
+				Source:      "opencode",
+				Status:      "active",
+			})
 		}
 	}
 
-	syncLSP := func() {
-		lspBool, isBool := cfg["lsp"].(bool)
-		lspObj, isObj := cfg["lsp"].(map[string]interface{})
-		if isBool {
-			_ = s.db.SetPreference(metaPrefix+"lsp", fmt.Sprintf("%t", lspBool))
-		} else if isObj {
-			_ = s.db.SetPreference(metaPrefix+"lsp", "object")
-			for id, val := range lspObj {
-				entry, _ := val.(map[string]interface{})
-				l := models.LSPServer{ID: id}
-				if cmd, _ := entry["command"].([]interface{}); len(cmd) > 0 {
-					b, _ := json.Marshal(cmd)
-					l.Command = string(b)
-				}
-				if ext, _ := entry["extensions"].([]interface{}); len(ext) > 0 {
-					b, _ := json.Marshal(ext)
-					l.Extensions = string(b)
-				}
-				if env, _ := entry["env"].(map[string]interface{}); len(env) > 0 {
-					b, _ := json.Marshal(env)
-					l.Env = string(b)
-				}
-				if init, _ := entry["initialization"].(string); init != "" {
-					l.Initialization = init
-				}
-				if dis, _ := entry["disabled"].(bool); dis {
-					l.Disabled = dis
-				}
-				_ = s.db.UpsertLSPServer(&l)
-			}
-		}
-	}
-
-	setJSONPref := func(key string, val interface{}) {
-		b, _ := json.Marshal(val)
-		_ = s.db.SetPreference(key, string(b))
-	}
-
-	syncMeta := func() {
-		simple := []string{"autoupdate", "disabled_providers", "model", "small_model", "share", "plugin"}
-		for _, key := range simple {
-			if v, exists := cfg[key]; exists {
-				setJSONPref(metaPrefix+key, v)
-			}
-		}
-
-		if skills, ok := cfg["skills"].(map[string]interface{}); ok {
-			for sk, sv := range skills {
-				setJSONPref(metaPrefix+"skills_"+sk, sv)
-			}
-		}
-
-		if comp, ok := cfg["compaction"].(map[string]interface{}); ok {
-			for ck, cv := range comp {
-				setJSONPref(metaPrefix+"compaction_"+ck, cv)
-			}
-		}
-	}
-
+	syncAgents()
+	syncProviders()
 	syncMCP()
 	syncCommands()
-	syncLSP()
-	syncMeta()
-	return nil
-}
 
-func (s *Service) loadProfiles() (map[string]models.ModelProfile, error) {
-	list, err := s.db.ListModelProfiles()
-	if err != nil {
-		return nil, err
+	// Sync meta preferences
+	metaKeys := map[string]bool{
+		"autoupdate": true, "disabled_providers": true, "model": true,
+		"small_model": true, "share": true, "compaction": true, "lsp": true,
+		"skills": true, "enabled_providers": true,
 	}
-	out := make(map[string]models.ModelProfile, len(list))
-	for _, p := range list {
-		out[p.ModelID] = p
+	for key := range metaKeys {
+		val, ok := cfg[key]
+		if !ok {
+			continue
+		}
+		b, err := json.Marshal(val)
+		if err != nil {
+			continue
+		}
+		_ = s.db.SetPreference(metaPrefix+key, string(b))
 	}
-	return out, nil
+
+	return nil
 }
 
 func (s *Service) buildProviderSection(providers []models.Provider, profiles map[string]models.ModelProfile) (int, int, map[string]interface{}) {
 	section := make(map[string]interface{})
 	totalActive := 0
 	totalError := 0
+	prefs, _ := s.db.ListPreferences()
+
+	// Read disabled_providers / enabled_providers from preferences
+	disabledRaw, _ := prefs["config/disabled_providers"]
+	disabled := parseStringList(disabledRaw)
+	enabledRaw, _ := prefs["config/enabled_providers"]
+	enabled := parseStringList(enabledRaw)
+	hasEnabledFilter := len(enabled) > 0
+
 	for _, p := range providers {
+		// Explicit disabled/enabled filtering
+		if _, disabled := disabled[p.ID]; disabled {
+			continue
+		}
+		if hasEnabledFilter && !enabled[p.ID] {
+			continue
+		}
+
 		models, err := s.db.ListModelsByProvider(p.ID)
 		if err != nil {
 			continue
 		}
+
 		whitelist := make([]string, 0, len(models))
 		modelEntries := make(map[string]interface{})
 		for _, m := range models {
@@ -268,6 +348,12 @@ func (s *Service) buildProviderSection(providers []models.Provider, profiles map
 			entry := buildModelEntry(m, profiles[m.ID])
 			modelEntries[m.DisplayName] = entry
 		}
+
+		// Skip providers with no models (regardless of key status)
+		if len(whitelist) == 0 {
+			continue
+		}
+
 		entry := map[string]interface{}{}
 		if len(whitelist) > 0 {
 			entry["whitelist"] = whitelist
@@ -275,17 +361,33 @@ func (s *Service) buildProviderSection(providers []models.Provider, profiles map
 		if len(modelEntries) > 0 {
 			entry["models"] = modelEntries
 		}
-		if p.BaseURL != "" {
-			entry["api"] = p.BaseURL
-		}
 		if p.Name != "" {
 			entry["name"] = p.Name
+		}
+		if p.BaseURL != "" {
+			entry["options"] = map[string]interface{}{"baseURL": p.BaseURL}
 		}
 		if len(entry) > 0 {
 			section[p.ID] = entry
 		}
 	}
 	return totalActive, totalError, section
+}
+
+func parseStringList(raw string) map[string]bool {
+	out := make(map[string]bool)
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return out
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return out
+	}
+	for _, s := range list {
+		out[s] = true
+	}
+	return out
 }
 
 func buildModelEntry(m models.Model, profile models.ModelProfile) map[string]interface{} {
@@ -304,31 +406,43 @@ func buildModelEntry(m models.Model, profile models.ModelProfile) map[string]int
 	}
 	entry["limit"] = map[string]interface{}{
 		"context": context,
-		"output":  maxOutput,
 	}
-	entry["tool_call"] = m.FunctionCalling
-	entry["attachment"] = m.Vision
-	entry["cost"] = map[string]interface{}{
-		"input":  m.PricingPrompt,
-		"output": m.PricingCompletion,
+	if maxOutput > 0 {
+		entry["limit"].(map[string]interface{})["output"] = maxOutput
 	}
-	inputModalities := []string{"text"}
+	if m.FunctionCalling {
+		entry["tool_call"] = true
+	}
 	if m.Vision {
-		inputModalities = append(inputModalities, "image")
+		entry["attachment"] = true
+		entry["modalities"] = map[string]interface{}{
+			"input": []string{"image"},
+		}
 	}
-	entry["modalities"] = map[string]interface{}{
-		"input":  inputModalities,
-		"output": []string{"text"},
+	if m.PricingPrompt > 0 || m.PricingCompletion > 0 {
+		entry["cost"] = map[string]interface{}{
+			"input":  m.PricingPrompt,
+			"output": m.PricingCompletion,
+		}
 	}
-	switch m.Status {
-	case "deprecated":
-		entry["status"] = "deprecated"
-	case "beta":
-		entry["status"] = "beta"
-	case "alpha":
-		entry["status"] = "alpha"
+	// Only include status if it's set and not "active" or "untested" (both are implicit)
+	// OpenCode schema only accepts: alpha, beta, deprecated, active
+	if m.Status != "" && m.Status != "active" && m.Status != "untested" {
+		entry["status"] = m.Status
 	}
 	return entry
+}
+
+func (s *Service) loadProfiles() (map[string]models.ModelProfile, error) {
+	profiles, err := s.db.ListModelProfiles()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]models.ModelProfile, len(profiles))
+	for _, p := range profiles {
+		out[p.ModelID] = p
+	}
+	return out, nil
 }
 
 func (s *Service) buildAgentSection() (map[string]interface{}, error) {
@@ -640,6 +754,9 @@ func (s *Service) buildMetaFromDB() map[string]interface{} {
 			obj[sk] = val
 			continue
 		}
+		if strings.HasPrefix(stem, "provider_") {
+			continue
+		}
 		var val interface{}
 		_ = json.Unmarshal([]byte(v), &val)
 		result[stem] = val
@@ -651,22 +768,22 @@ func (s *Service) buildMetaFromDB() map[string]interface{} {
 }
 
 var generatorManagedKeys = map[string]bool{
-	"$schema":           true,
-	"provider":          true,
-	"agent":             true,
-	"command":           true,
-	"mcp":               true,
-	"permission":        true,
-	"experimental":      true,
-	"lsp":               true,
-	"plugin":            true,
-	"skills":            true,
-	"autoupdate":        true,
+	"$schema":            true,
+	"provider":           true,
+	"agent":              true,
+	"command":            true,
+	"mcp":                true,
+	"permission":         true,
+	"experimental":       true,
+	"lsp":                true,
+	"plugin":             true,
+	"skills":             true,
+	"autoupdate":         true,
 	"disabled_providers": true,
-	"model":             true,
-	"small_model":       true,
-	"share":             true,
-	"compaction":        true,
+	"model":              true,
+	"small_model":        true,
+	"share":              true,
+	"compaction":         true,
 }
 
 func (s *Service) mergeWithExisting(generated, existing map[string]interface{}) map[string]interface{} {

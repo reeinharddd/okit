@@ -69,16 +69,15 @@ func TestLive_FetchRealModels_GroqShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ProviderConfigs["groq"] = ProviderConfig{
-		ID: "groq", APIBase: srv.URL, KeyEnv: "GROQ_API_KEY", Auth: "bearer",
-		ModelPath: "data", ChatURL: srv.URL + "/chat/completions",
+	prov := &models.Provider{
+		ID: "groq", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY",
 	}
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
 
 	fdb := &fakeDB{}
 	l := NewLive(fdb, 1)
-	ids, err := l.FetchRealModels(context.Background(), "groq")
+	ids, err := l.FetchRealModels(context.Background(), prov)
 	if err != nil {
 		t.Fatalf("FetchRealModels: %v", err)
 	}
@@ -104,9 +103,8 @@ func TestLive_DiffProvider_IdentifiesPhantomAndMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ProviderConfigs["groq"] = ProviderConfig{
-		ID: "groq", APIBase: srv.URL, KeyEnv: "GROQ_API_KEY", Auth: "bearer",
-		ModelPath: "data", ChatURL: srv.URL + "/chat/completions",
+	prov := &models.Provider{
+		ID: "groq", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY",
 	}
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
@@ -121,7 +119,7 @@ func TestLive_DiffProvider_IdentifiesPhantomAndMissing(t *testing.T) {
 		},
 	}
 	l := NewLive(fdb, 1)
-	res, err := l.DiffProvider(context.Background(), "groq")
+	res, err := l.DiffProvider(context.Background(), prov)
 	if err != nil {
 		t.Fatalf("DiffProvider: %v", err)
 	}
@@ -164,13 +162,12 @@ func TestLive_SmokeOne_OKAnd404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ProviderConfigs["groq"] = ProviderConfig{
-		ID: "groq", APIBase: srv.URL, KeyEnv: "GROQ_API_KEY", Auth: "bearer",
-		ModelPath: "data", ChatURL: srv.URL + "/chat/completions",
+	prov := &models.Provider{
+		ID: "groq", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY",
 	}
 	l := NewLive(&fakeDB{}, 1)
 
-	okRes := l.SmokeOne(context.Background(), ProviderConfigs["groq"], "groq", "ok-model", "test")
+	okRes := l.SmokeOne(context.Background(), prov, "ok-model", "test")
 	if okRes.Status != "ok" {
 		t.Errorf("ok-model status = %q, want ok", okRes.Status)
 	}
@@ -178,7 +175,7 @@ func TestLive_SmokeOne_OKAnd404(t *testing.T) {
 		t.Errorf("ok-model latency negative: %f", okRes.LatencyMs)
 	}
 
-	notFound := l.SmokeOne(context.Background(), ProviderConfigs["groq"], "groq", "missing-model", "test")
+	notFound := l.SmokeOne(context.Background(), prov, "missing-model", "test")
 	if notFound.Status != "not_found" {
 		t.Errorf("missing-model status = %q, want not_found", notFound.Status)
 	}
@@ -203,16 +200,12 @@ func TestLive_FixAll_MarksPhantomsAndInsertsMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ProviderConfigs["groq"] = ProviderConfig{
-		ID: "groq", APIBase: srv.URL, KeyEnv: "GROQ_API_KEY", Auth: "bearer",
-		ModelPath: "data", ChatURL: srv.URL + "/chat/completions",
-	}
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
 
 	fdb := &fakeDB{
 		providers: []models.Provider{
-			{ID: "groq", Status: "active"},
+			{ID: "groq", Status: "active", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY"},
 		},
 		models: map[string][]models.Model{
 			"groq": {

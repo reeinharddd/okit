@@ -9,18 +9,20 @@ import (
 )
 
 func (d *DB) UpsertProvider(p *models.Provider) error {
-	_, err := d.Exec(`INSERT INTO providers (id, name, api_base, catalog_url, key_env, source, status, priority, last_synced)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := d.Exec(`INSERT INTO providers (id, name, api_base, catalog_url, key_env, is_free, source, status, priority, last_synced)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 		name=excluded.name, api_base=excluded.api_base, catalog_url=excluded.catalog_url,
-		key_env=excluded.key_env, source=excluded.source, status=excluded.status,
+		key_env=excluded.key_env, is_free=excluded.is_free,
+		source=excluded.source, status=excluded.status,
 		priority=excluded.priority, last_synced=excluded.last_synced`,
-		p.ID, p.Name, p.BaseURL, p.CatalogURL, p.KeyEnv, p.Source, p.Status, p.Priority, p.LastSynced)
+		p.ID, p.Name, p.BaseURL, p.CatalogURL, p.KeyEnv, boolToInt(p.IsFree),
+		p.Source, p.Status, p.Priority, p.LastSynced)
 	return err
 }
 
 func (d *DB) ListProviders() ([]models.Provider, error) {
-	rows, err := d.Query(`SELECT id, name, COALESCE(api_base,''), COALESCE(catalog_url,''), COALESCE(key_env,''), COALESCE(source,'auto'), COALESCE(status,'active'), COALESCE(priority,99), COALESCE(last_synced,0) FROM providers ORDER BY priority`)
+	rows, err := d.Query(`SELECT id, name, COALESCE(api_base,''), COALESCE(catalog_url,''), COALESCE(key_env,''), COALESCE(is_free,0), COALESCE(source,'auto'), COALESCE(status,'active'), COALESCE(priority,99), COALESCE(last_synced,0) FROM providers ORDER BY priority`)
 	if err != nil {
 		return nil, err
 	}
@@ -28,9 +30,11 @@ func (d *DB) ListProviders() ([]models.Provider, error) {
 	var out []models.Provider
 	for rows.Next() {
 		var p models.Provider
-		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.CatalogURL, &p.KeyEnv, &p.Source, &p.Status, &p.Priority, &p.LastSynced); err != nil {
+		var isFree int
+		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.CatalogURL, &p.KeyEnv, &isFree, &p.Source, &p.Status, &p.Priority, &p.LastSynced); err != nil {
 			return nil, err
 		}
+		p.IsFree = isFree != 0
 		out = append(out, p)
 	}
 	return out, nil
@@ -38,11 +42,13 @@ func (d *DB) ListProviders() ([]models.Provider, error) {
 
 func (d *DB) GetProvider(id string) (*models.Provider, error) {
 	var p models.Provider
-	err := d.QueryRow(`SELECT id, name, COALESCE(api_base,''), COALESCE(catalog_url,''), COALESCE(key_env,''), COALESCE(source,'auto'), COALESCE(status,'active'), COALESCE(priority,99), COALESCE(last_synced,0) FROM providers WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.BaseURL, &p.CatalogURL, &p.KeyEnv, &p.Source, &p.Status, &p.Priority, &p.LastSynced)
+	var isFree int
+	err := d.QueryRow(`SELECT id, name, COALESCE(api_base,''), COALESCE(catalog_url,''), COALESCE(key_env,''), COALESCE(is_free,0), COALESCE(source,'auto'), COALESCE(status,'active'), COALESCE(priority,99), COALESCE(last_synced,0) FROM providers WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.BaseURL, &p.CatalogURL, &p.KeyEnv, &isFree, &p.Source, &p.Status, &p.Priority, &p.LastSynced)
 	if err != nil {
 		return nil, err
 	}
+	p.IsFree = isFree != 0
 	return &p, nil
 }
 
