@@ -1,42 +1,69 @@
 package models
 
 type Provider struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	BaseURL    string `json:"api_base,omitempty"`
-	CatalogURL string `json:"catalog_url,omitempty"`
-	KeyEnv     string `json:"key_env,omitempty"`
-	IsFree     bool   `json:"is_free"`     // skip audit, auto-activate models
-	Source     string `json:"source"`      // seed, opencode, custom, auto
-	Status     string `json:"status"`      // active, error, disabled
-	Priority   int    `json:"priority"`
-	LastSynced int64  `json:"last_synced,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	BaseURL         string `json:"api_base,omitempty"`
+	CatalogURL      string `json:"catalog_url,omitempty"`
+	KeyEnv          string `json:"key_env,omitempty"`
+	IsFree          bool   `json:"is_free"`
+	Enabled         bool   `json:"enabled"`
+	Source          string `json:"source"`
+	Status          string `json:"status"`
+	Priority        int    `json:"priority"`
+	TimeoutMs       int    `json:"timeout_ms,omitempty"`
+	HeaderTimeoutMs int    `json:"header_timeout_ms,omitempty"`
+	ChunkTimeoutMs  int    `json:"chunk_timeout_ms,omitempty"`
+	EnterpriseURL   string `json:"enterprise_url,omitempty"`
+	SetCacheKey     bool   `json:"set_cache_key,omitempty"`
+	APIPackage      string `json:"api_package,omitempty"`
+	EnvList         string `json:"env_list,omitempty"` // JSON array
+	LastSynced      int64  `json:"last_synced,omitempty"`
 }
 
 type Model struct {
-	ID               string  `json:"id"`
-	ProviderID       string  `json:"provider_id"`
-	DisplayName      string  `json:"display_name,omitempty"`
-	Description      string  `json:"description,omitempty"`
-	ContextWindow    int     `json:"context_window"`
-	FunctionCalling  bool    `json:"function_calling"`
-	Vision           bool    `json:"vision"`
-	Streaming        bool    `json:"streaming"`
-	StructuredOutput bool    `json:"structured_outputs"`
-	LatencyP50Ms     float64 `json:"latency_p50_ms,omitempty"`
-	LatencyP95Ms     float64 `json:"latency_p95_ms,omitempty"`
-	TokensPerSec     float64 `json:"tokens_per_sec,omitempty"`
-	PricingPrompt    float64 `json:"pricing_prompt,omitempty"`
+	ID                string  `json:"id"`
+	ProviderID        string  `json:"provider_id"`
+	DisplayName       string  `json:"display_name,omitempty"`
+	Description       string  `json:"description,omitempty"`
+	ContextWindow     int     `json:"context_window"`
+	MaxOutput         int     `json:"max_output,omitempty"`
+	FunctionCalling   bool    `json:"function_calling"`
+	Vision            bool    `json:"vision"`
+	Reasoning         bool    `json:"reasoning,omitempty"`
+	Audio             bool    `json:"audio,omitempty"`
+	OCR               bool    `json:"ocr,omitempty"`
+	FineTuning        bool    `json:"fine_tuning,omitempty"`
+	Classification    bool    `json:"classification,omitempty"`
+	Moderation        bool    `json:"moderation,omitempty"`
+	Streaming         bool    `json:"streaming"`
+	StructuredOutput  bool    `json:"structured_outputs"`
+	LatencyP50Ms      float64 `json:"latency_p50_ms,omitempty"`
+	LatencyP95Ms      float64 `json:"latency_p95_ms,omitempty"`
+	TokensPerSec      float64 `json:"tokens_per_sec,omitempty"`
+	PricingPrompt     float64 `json:"pricing_prompt,omitempty"`
 	PricingCompletion float64 `json:"pricing_completion,omitempty"`
-	PricingCacheRead float64 `json:"pricing_cache_read,omitempty"`
-	Tier             string  `json:"tier"` // free, paid, unknown
-	Status           string  `json:"status"` // active, error, deprecated, paid, untested
-	ErrorMessage     string  `json:"error_message,omitempty"`
-	Tags             string  `json:"tags,omitempty"` // JSON array
-	LastTested       int64   `json:"last_tested,omitempty"`
-	TestCount        int     `json:"test_count,omitempty"`
-	FailCount        int     `json:"fail_count,omitempty"`
-	Source           string  `json:"source"` // discovered, manual
+	PricingCacheRead  float64 `json:"pricing_cache_read,omitempty"`
+	PricingCacheWrite float64 `json:"pricing_cache_write,omitempty"`
+	DefaultTemp       float64 `json:"default_temperature,omitempty"`
+	Tier              string  `json:"tier"`
+	Status            string  `json:"status"`
+	ErrorMessage      string  `json:"error_message,omitempty"`
+	Tags              string  `json:"tags,omitempty"`
+	Aliases           string  `json:"aliases,omitempty"`
+	Family            string  `json:"family,omitempty"`
+	ReleaseDate       string  `json:"release_date,omitempty"`
+	Deprecation       string  `json:"deprecation,omitempty"`
+	Interleaved       string  `json:"interleaved,omitempty"` // JSON: true | {"field":"reasoning_content"}
+	Experimental      bool    `json:"experimental,omitempty"`
+	ModalitiesInput   string  `json:"modalities_input,omitempty"`
+	ModalitiesOutput  string  `json:"modalities_output,omitempty"`
+	CreatedTimestamp  int64   `json:"created_timestamp,omitempty"`
+	OwnedBy           string  `json:"owned_by,omitempty"`
+	LastTested        int64   `json:"last_tested,omitempty"`
+	TestCount         int     `json:"test_count,omitempty"`
+	FailCount         int     `json:"fail_count,omitempty"`
+	Source            string  `json:"source"`
 }
 
 type Agent struct {

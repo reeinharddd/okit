@@ -45,6 +45,13 @@ audits capabilities, generates optimal config, and auto-heals issues.
 				return nil
 			}
 			_ = LoadEnvFile()
+
+			if d, err := openDB(&dbPath); err == nil {
+				if providers, listErr := d.ListProviders(); listErr == nil {
+					InjectKeysFromAuth(providers)
+				}
+				d.Close()
+			}
 			return nil
 		},
 	}
@@ -124,7 +131,12 @@ func newDiscoverCmd(dbPath *string) *cobra.Command {
 func newAuditCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit",
-		Short: "Test model capabilities",
+		Short: "Test model capabilities via real API calls",
+		Long: `Tests every model against its provider API.
+
+By default, skips already-active models (cache hit). Use --full to re-test everything.
+
+Error models are always re-tested — errors may be transient (rate limits, outages).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			full, _ := cmd.Flags().GetBool("full")
 			d, err := openDB(dbPath)
@@ -137,7 +149,7 @@ func newAuditCmd(dbPath *string) *cobra.Command {
 			return svc.Run(cmd.Context(), full)
 		},
 	}
-	cmd.Flags().Bool("full", false, "Test all models (default: only new + errored)")
+	cmd.Flags().Bool("full", false, "Re-test already-active models too")
 	cmd.AddCommand(newAuditLiveCmd(dbPath))
 	return cmd
 }
@@ -332,7 +344,7 @@ func newDailyCmd(dbPath *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().Bool("full", false, "Full re-audit of all models")
+	cmd.Flags().Bool("full", false, "Re-test already-active models during audit")
 	return cmd
 }
 
@@ -430,71 +442,7 @@ func newProvidersCmd(dbPath *string) *cobra.Command {
 }
 
 func newModelsCmd(dbPath *string) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "models",
-		Short: "Manage models",
-	}
-	listCmd := &cobra.Command{
-		Use:   "list",
-		Short: "List models",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			paid, _ := cmd.Flags().GetBool("paid")
-			d, err := openDB(dbPath)
-			if err != nil {
-				return err
-			}
-			defer d.Close()
-
-			var opts []db.ModelFilter
-			if !paid {
-				opts = append(opts, db.StatusActive())
-				opts = append(opts, db.Tier("free"))
-			}
-			models, err := d.ListModels(opts...)
-			if err != nil {
-				return err
-			}
-			if len(models) == 0 && !paid {
-				// If no active models, show untested ones
-				allModels, _ := d.ListModels()
-				models = allModels
-			}
-			fmt.Printf("%-35s %-15s %-8s %-12s %s\n", "Model", "Provider", "Context", "FC", "Status")
-			fmt.Println(strings.Repeat("-", 85))
-			for _, m := range models {
-				fc := "✓"
-				if !m.FunctionCalling {
-					fc = "-"
-				}
-				ctx := fmt.Sprintf("%dK", m.ContextWindow/1000)
-				fmt.Printf("%-35s %-15s %-8s %-12s %s\n", m.ID, m.ProviderID, ctx, fc, m.Status)
-			}
-			return nil
-		},
-	}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "search",
-		Short: "Search models",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := openDB(dbPath)
-			if err != nil {
-				return err
-			}
-			defer d.Close()
-			models, err := d.SearchModels(args[0])
-			if err != nil {
-				return err
-			}
-			for _, m := range models {
-				fmt.Printf("%s/%s: %s (ctx: %d, FC: %v)\n", m.ProviderID, m.ID, m.Status, m.ContextWindow, m.FunctionCalling)
-			}
-			return nil
-		},
-	})
-	cmd.AddCommand(listCmd)
-	listCmd.Flags().Bool("paid", false, "Include paid models")
-	return cmd
+	return newModelsCmdImpl(dbPath)
 }
 
 func newSyncCmd(dbPath *string) *cobra.Command {

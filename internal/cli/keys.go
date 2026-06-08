@@ -9,24 +9,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type keyCheck struct {
-	EnvVar string
-	Name   string
+// collectKeyCandidates gathers key names from opencode.env, provider key_env in the DB,
+// and OpenCode's own auth.json credentials. Also injects auth.json keys into the
+// process environment so resolveKey can find them.
+func collectKeyCandidates() []string {
+	seen := make(map[string]bool)
+	var keys []string
+
+	if envVars, err := parseEnvFile(OpenCodeEnvPath()); err == nil {
+		for k := range envVars {
+			if !seen[k] {
+				keys = append(keys, k)
+				seen[k] = true
+			}
+		}
+	}
+
+	if d, err := openDB(nil); err == nil {
+		providers, listErr := d.ListProviders()
+		if listErr == nil {
+			InjectKeysFromAuth(providers)
+
+			for _, p := range providers {
+				if p.KeyEnv != "" && !seen[p.KeyEnv] {
+					keys = append(keys, p.KeyEnv)
+					seen[p.KeyEnv] = true
+				}
+			}
+		}
+		d.Close()
+	}
+
+	sort.Strings(keys)
+	return keys
 }
 
-var expectedKeys = []keyCheck{
-	{"OPENAI_API_KEY", "OpenAI"},
-	{"ANTHROPIC_API_KEY", "Anthropic"},
-	{"MISTRAL_API_KEY", "Mistral"},
-	{"GROQ_API_KEY", "Groq"},
-	{"GOOGLE_API_KEY", "Google"},
-	{"GITHUB_TOKEN", "GitHub Models"},
-	{"NVIDIA_API_KEY", "NVIDIA"},
-	{"CEREBRAS_API_KEY", "Cerebras"},
-	{"BROWSERBASE_API_KEY", "Browserbase"},
-	{"FIRECRAWL_API_KEY", "Firecrawl"},
-	{"OPENROUTER_API_KEY", "OpenRouter"},
-	{"OPENCODE_ZEN_API_KEY", "OpenCode Zen"},
+// resolveKey returns the value for a key name, checking opencode.env first,
+// then falling back to the process environment.
+func resolveKey(key string) string {
+	if envVars, err := parseEnvFile(OpenCodeEnvPath()); err == nil {
+		if v := envVars[key]; v != "" {
+			return v
+		}
+	}
+	return os.Getenv(key)
 }
 
 func parseEnvFile(path string) (map[string]string, error) {
@@ -65,19 +91,17 @@ func newKeysCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "doctor",
 		Short: "Verify API keys exist and are non-empty",
+		Long: `Checks keys from opencode.env and provider key_env references.
+No hardcoded key list — adapts to your actual configuration.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envPath := OpenCodeEnvPath()
+			candidates := collectKeyCandidates()
 
-			envVars, err := parseEnvFile(envPath)
-			if err != nil {
-				fmt.Printf("Cannot read %s: %v\n", envPath, err)
-				fmt.Println("\nChecking environment variables directly instead:")
-				envVars = make(map[string]string)
-				for _, k := range expectedKeys {
-					if v := os.Getenv(k.EnvVar); v != "" {
-						envVars[k.EnvVar] = v
-					}
-				}
+			if len(candidates) == 0 {
+				fmt.Println("=== API Key Check ===")
+				fmt.Println()
+				fmt.Println("  No keys found to check.")
+				fmt.Println("  Use 'okit keys set KEY_NAME VALUE' to add keys.")
+				return nil
 			}
 
 			found := 0
@@ -87,21 +111,18 @@ func newKeysCmd() *cobra.Command {
 			fmt.Println("=== API Key Check ===")
 			fmt.Println()
 
-			for _, k := range expectedKeys {
-				val := envVars[k.EnvVar]
-				if val == "" {
-					val = os.Getenv(k.EnvVar)
-				}
+			for _, name := range candidates {
+				val := resolveKey(name)
 
 				if val == "" {
-					fmt.Printf("  MISS  %-25s  (%s)\n", k.EnvVar, k.Name)
+					fmt.Printf("  MISS  %s\n", name)
 					missing++
 				} else if val == `"` || val == `''` {
-					fmt.Printf("  EMPTY %-25s  (%s)\n", k.EnvVar, k.Name)
+					fmt.Printf("  EMPTY %s\n", name)
 					empty++
 				} else {
 					masked := maskKey(val)
-					fmt.Printf("  OK    %-25s  (%s) = %s\n", k.EnvVar, k.Name, masked)
+					fmt.Printf("  OK    %s = %s\n", name, masked)
 					found++
 				}
 			}

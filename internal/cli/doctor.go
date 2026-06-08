@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/reeinharddd/okit/internal/util"
@@ -45,7 +44,6 @@ func newDoctorCmd() *cobra.Command {
 		fmt.Println()
 
 		fmt.Println("[3/5] Database check...")
-		configDir := OpenCodeConfigDir()
 		dbPath := OpenCodeDBPath()
 		if err := checkDatabase(dbPath); err != nil {
 			fmt.Printf("  FAIL: %v\n", err)
@@ -64,26 +62,22 @@ func newDoctorCmd() *cobra.Command {
 
 		if *withKeys {
 			fmt.Println("[5/5] Keys check...")
-			envPath := filepath.Join(configDir, "opencode.env")
-			if _, err := os.Stat(envPath); os.IsNotExist(err) {
-				fmt.Println("  WARN: opencode.env not found")
+			candidates := collectKeyCandidates()
+			if len(candidates) == 0 {
+				fmt.Println("  No keys found to check.")
 			} else {
-				envVars, _ := parseEnvFile(envPath)
 				missing := 0
-				for _, k := range expectedKeys {
-					val := envVars[k.EnvVar]
+				for _, name := range candidates {
+					val := resolveKey(name)
 					if val == "" {
-						val = os.Getenv(k.EnvVar)
-					}
-					if val == "" {
-						fmt.Printf("  MISS: %s (%s)\n", k.EnvVar, k.Name)
+						fmt.Printf("  MISS: %s\n", name)
 						missing++
 					}
 				}
 				if missing == 0 {
-					fmt.Println("  OK: all keys present")
+					fmt.Printf("  OK: %d key(s) present\n", len(candidates))
 				} else {
-					fmt.Printf("  %d key(s) missing\n", missing)
+					fmt.Printf("  %d/%d key(s) missing\n", missing, len(candidates))
 					fail += missing
 				}
 			}

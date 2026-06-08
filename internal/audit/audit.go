@@ -87,11 +87,15 @@ func (s *Service) Run(ctx context.Context, full bool) error {
 						return fmt.Errorf("upsert %s: %w", m.ID, err)
 					}
 
-					status := result.Status
-					if status == "" {
-						status = "active"
-					}
+				status := result.Status
+				if status == "" {
+					status = "active"
+				}
+				if status == "error" && result.ErrorMessage != "" {
+					fmt.Printf("  %s: %s (%.0fms) — %s\n", m.ID, status, result.LatencyP50Ms, result.ErrorMessage)
+				} else {
 					fmt.Printf("  %s: %s (%.0fms)\n", m.ID, status, result.LatencyP50Ms)
+				}
 					return nil
 				})
 			}

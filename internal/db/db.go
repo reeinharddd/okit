@@ -121,8 +121,13 @@ func (d *DB) SeedDefaults() error {
 		return fmt.Errorf("seed routing rules: %w", err)
 	}
 	for _, p := range seedProviders {
-		if err := d.UpsertProvider(&p); err != nil {
-			return fmt.Errorf("seed provider %s: %w", p.ID, err)
+		if removed, _ := d.GetPreference("seed_removed:" + p.ID); removed == "1" {
+			continue
+		}
+		if _, err := d.GetProvider(p.ID); err != nil {
+			if err := d.UpsertProvider(&p); err != nil {
+				return fmt.Errorf("seed provider %s: %w", p.ID, err)
+			}
 		}
 	}
 	return nil

@@ -26,17 +26,19 @@ type taskDef struct {
 	MinContext     int
 	NeedsFC        bool
 	NeedsVision    bool
+	NeedsReasoning bool
+	NeedsAudio     bool
 	Priority       string
 	MaxCostPerCall float64
 }
 
 var taskDefs = map[string]taskDef{
-	"coding_complex": {"Complex coding tasks with function calling", 100000, true, false, "quality", 0.06},
-	"coding_fast":    {"Fast coding with function calling", 50000, true, false, "speed", 0.03},
-	"reasoning":      {"Deep reasoning and analysis", 100000, false, false, "quality", 0.05},
-	"vision":         {"Vision and image understanding", 100000, false, true, "quality", 0.08},
-	"long_context":   {"Long context research and analysis", 500000, false, false, "cost", 0.10},
-	"fastest":        {"Simple tasks, maximum speed", 0, false, false, "speed", 0.01},
+	"coding_complex": {"Complex coding tasks with function calling", 100000, true, false, false, false, "quality", 0.06},
+	"coding_fast":    {"Fast coding with function calling", 50000, true, false, false, false, "speed", 0.03},
+	"reasoning":      {"Deep reasoning and analysis", 100000, false, false, true, false, "quality", 0.05},
+	"vision":         {"Vision and image understanding", 100000, false, true, false, false, "quality", 0.08},
+	"long_context":   {"Long context research and analysis", 500000, false, false, false, false, "cost", 0.10},
+	"fastest":        {"Simple tasks, maximum speed", 0, false, false, false, false, "speed", 0.01},
 }
 
 type candidate struct {
@@ -143,6 +145,15 @@ func scoreModel(m models.Model, def taskDef) float64 {
 	if m.Vision {
 		score += 2
 	}
+	if m.Reasoning {
+		score += 2
+	}
+	if m.Audio {
+		score += 1
+	}
+	if m.OCR {
+		score += 1
+	}
 
 	latencyScore := 0.0
 	if m.LatencyP50Ms > 0 {
@@ -178,6 +189,15 @@ func scoreModel(m models.Model, def taskDef) float64 {
 	case "quality":
 		score += ctxScore * 1.5
 		if m.FunctionCalling {
+			score += 2
+		}
+		if def.NeedsReasoning && m.Reasoning {
+			score += 3
+			if m.Interleaved != "" {
+				score += 1
+			}
+		}
+		if def.NeedsVision && m.Vision {
 			score += 2
 		}
 	case "cost":
@@ -224,6 +244,12 @@ func eligibleModel(m models.Model, def taskDef, budget models.BudgetConfig) bool
 		return false
 	}
 	if def.NeedsVision && !m.Vision {
+		return false
+	}
+	if def.NeedsReasoning && !m.Reasoning {
+		return false
+	}
+	if def.NeedsAudio && !m.Audio {
 		return false
 	}
 	if circuitOpen(m) {

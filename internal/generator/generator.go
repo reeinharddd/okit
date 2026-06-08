@@ -171,14 +171,30 @@ func (s *Service) SyncExistingToDB() error {
 			// Read config entry
 			name, _ := provCfg["name"].(string)
 			p := models.Provider{
-				ID:     provID,
-				Name:   name,
-				Source: "opencode",
-				Status: "active",
+				ID:       provID,
+				Name:     name,
+				Source:   "opencode",
+				Status:   "active",
+				Enabled:  true,
 			}
 			if opts, ok := provCfg["options"].(map[string]interface{}); ok {
 				if bu, _ := opts["baseURL"].(string); bu != "" {
 					p.BaseURL = bu
+				}
+				if to, _ := opts["timeout"].(float64); to > 0 {
+					p.TimeoutMs = int(to)
+				}
+				if hto, _ := opts["headerTimeout"].(float64); hto > 0 {
+					p.HeaderTimeoutMs = int(hto)
+				}
+				if cto, _ := opts["chunkTimeout"].(float64); cto > 0 {
+					p.ChunkTimeoutMs = int(cto)
+				}
+				if eu, _ := opts["enterpriseUrl"].(string); eu != "" {
+					p.EnterpriseURL = eu
+				}
+				if sck, _ := opts["setCacheKey"].(bool); sck {
+					p.SetCacheKey = true
 				}
 			}
 
@@ -364,9 +380,31 @@ func (s *Service) buildProviderSection(providers []models.Provider, profiles map
 		if p.Name != "" {
 			entry["name"] = p.Name
 		}
+
+		// Provider options
+		opts := map[string]interface{}{}
 		if p.BaseURL != "" {
-			entry["options"] = map[string]interface{}{"baseURL": p.BaseURL}
+			opts["baseURL"] = p.BaseURL
 		}
+		if p.TimeoutMs > 0 {
+			opts["timeout"] = p.TimeoutMs
+		}
+		if p.HeaderTimeoutMs > 0 {
+			opts["headerTimeout"] = p.HeaderTimeoutMs
+		}
+		if p.ChunkTimeoutMs > 0 {
+			opts["chunkTimeout"] = p.ChunkTimeoutMs
+		}
+		if p.EnterpriseURL != "" {
+			opts["enterpriseUrl"] = p.EnterpriseURL
+		}
+		if p.SetCacheKey {
+			opts["setCacheKey"] = true
+		}
+		if len(opts) > 0 {
+			entry["options"] = opts
+		}
+
 		if len(entry) > 0 {
 			section[p.ID] = entry
 		}
@@ -395,7 +433,10 @@ func buildModelEntry(m models.Model, profile models.ModelProfile) map[string]int
 	if context <= 0 {
 		context = defaultContextWindow
 	}
-	maxOutput := defaultMaxOutput
+	maxOutput := m.MaxOutput
+	if maxOutput <= 0 {
+		maxOutput = defaultMaxOutput
+	}
 	if profile.MaxOutput > 0 {
 		maxOutput = profile.MaxOutput
 	}
@@ -404,32 +445,105 @@ func buildModelEntry(m models.Model, profile models.ModelProfile) map[string]int
 	if m.DisplayName != "" {
 		entry["name"] = m.DisplayName
 	}
-	entry["limit"] = map[string]interface{}{
+	if m.Description != "" {
+		entry["description"] = m.Description
+	}
+	if m.Family != "" {
+		entry["family"] = m.Family
+	}
+	if m.ReleaseDate != "" {
+		entry["release_date"] = m.ReleaseDate
+	}
+	if m.Aliases != "" {
+		var aliases []string
+		if err := json.Unmarshal([]byte(m.Aliases), &aliases); err == nil {
+			entry["aliases"] = aliases
+		}
+	}
+	if m.Experimental {
+		entry["experimental"] = true
+	}
+	if m.Interleaved != "" {
+		var interleaved interface{}
+		if err := json.Unmarshal([]byte(m.Interleaved), &interleaved); err == nil {
+			entry["interleaved"] = interleaved
+		}
+	}
+
+	limit := map[string]interface{}{
 		"context": context,
 	}
 	if maxOutput > 0 {
-		entry["limit"].(map[string]interface{})["output"] = maxOutput
+		limit["output"] = maxOutput
 	}
+	entry["limit"] = limit
+
 	if m.FunctionCalling {
 		entry["tool_call"] = true
 	}
-	if m.Vision {
-		entry["attachment"] = true
-		entry["modalities"] = map[string]interface{}{
-			"input": []string{"image"},
+	if m.Reasoning {
+		entry["reasoning"] = true
+	}
+	if m.DefaultTemp > 0 {
+		entry["temperature"] = true
+	}
+
+	// Modalities
+	if m.Vision || m.Audio || m.OCR || m.ModalitiesInput != "" || m.ModalitiesOutput != "" {
+		modalities := map[string]interface{}{}
+		if m.ModalitiesInput != "" {
+			var in []string
+			if err := json.Unmarshal([]byte(m.ModalitiesInput), &in); err == nil {
+				modalities["input"] = in
+			}
+		} else if m.Vision || m.OCR {
+			modalities["input"] = []string{"text", "image"}
+		}
+		if m.ModalitiesOutput != "" {
+			var out []string
+			if err := json.Unmarshal([]byte(m.ModalitiesOutput), &out); err == nil {
+				modalities["output"] = out
+			}
+		}
+		if m.Vision {
+			entry["attachment"] = true
+		}
+		if len(modalities) > 0 {
+			entry["modalities"] = modalities
 		}
 	}
-	if m.PricingPrompt > 0 || m.PricingCompletion > 0 {
-		entry["cost"] = map[string]interface{}{
+
+	// Cost
+	hasCost := m.PricingPrompt > 0 || m.PricingCompletion > 0 || m.PricingCacheRead > 0 || m.PricingCacheWrite > 0
+	if hasCost {
+		cost := map[string]interface{}{
 			"input":  m.PricingPrompt,
 			"output": m.PricingCompletion,
 		}
+		if m.PricingCacheRead > 0 {
+			cost["cache_read"] = m.PricingCacheRead
+		}
+		if m.PricingCacheWrite > 0 {
+			cost["cache_write"] = m.PricingCacheWrite
+		}
+		entry["cost"] = cost
 	}
-	// Only include status if it's set and not "active" or "untested" (both are implicit)
-	// OpenCode schema only accepts: alpha, beta, deprecated, active
+
+	// Status mapping: OpenCode schema accepts alpha, beta, deprecated, active
 	if m.Status != "" && m.Status != "active" && m.Status != "untested" {
-		entry["status"] = m.Status
+		status := m.Status
+		if status == "paid" {
+			status = "alpha"
+		}
+		entry["status"] = status
 	}
+	if m.Deprecation != "" {
+		var dep interface{}
+		if err := json.Unmarshal([]byte(m.Deprecation), &dep); err == nil {
+			entry["deprecation"] = dep
+		}
+	}
+
 	return entry
 }
 

@@ -33,6 +33,14 @@ never the actual API key value.`,
 	cmd.PersistentFlags().String("catalog-url", "", "Catalog/models endpoint URL")
 	cmd.PersistentFlags().Int("priority", 99, "Provider priority")
 	cmd.PersistentFlags().String("status", "active", "Provider status")
+	cmd.PersistentFlags().Bool("enabled", true, "Provider enabled")
+	cmd.PersistentFlags().Int("timeout-ms", 0, "Request timeout in ms")
+	cmd.PersistentFlags().Int("header-timeout-ms", 0, "Header timeout in ms")
+	cmd.PersistentFlags().Int("chunk-timeout-ms", 0, "Stream chunk timeout in ms")
+	cmd.PersistentFlags().String("enterprise-url", "", "GitHub Enterprise URL")
+	cmd.PersistentFlags().Bool("set-cache-key", false, "Enable prompt cache key")
+	cmd.PersistentFlags().String("api-package", "", "NPM package name")
+	cmd.PersistentFlags().String("env-list", "", "Env vars JSON array")
 
 	return cmd
 }
@@ -53,10 +61,14 @@ func newProviderListCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("%-20s %-25s %-15s %-8s %-7s\n", "ID", "Base URL", "Key Env", "Priority", "Status")
-			fmt.Println(strings.Repeat("-", 80))
+			fmt.Printf("%-20s %-25s %-15s %-8s %-7s %-7s\n", "ID", "Base URL", "Key Env", "Priority", "Status", "Enabled")
+			fmt.Println(strings.Repeat("-", 90))
 			for _, p := range providers {
-				fmt.Printf("%-20s %-25s %-15s %-8d %-7s\n", p.ID, p.BaseURL, p.KeyEnv, p.Priority, p.Status)
+				en := "yes"
+				if !p.Enabled {
+					en = "no"
+				}
+				fmt.Printf("%-20s %-25s %-15s %-8d %-7s %-7s\n", p.ID, p.BaseURL, p.KeyEnv, p.Priority, p.Status, en)
 			}
 			return nil
 		},
@@ -93,6 +105,7 @@ Example:
 				KeyEnv:   keyEnv,
 				Source:   "custom",
 				Status:   "active",
+				Enabled:  true,
 				Priority: 99,
 			}
 
@@ -107,6 +120,30 @@ Example:
 			}
 			if st, _ := cmd.Flags().GetString("status"); st != "active" {
 				p.Status = st
+			}
+			if en, _ := cmd.Flags().GetBool("enabled"); cmd.Flags().Changed("enabled") {
+				p.Enabled = en
+			}
+			if v, _ := cmd.Flags().GetInt("timeout-ms"); v > 0 {
+				p.TimeoutMs = v
+			}
+			if v, _ := cmd.Flags().GetInt("header-timeout-ms"); v > 0 {
+				p.HeaderTimeoutMs = v
+			}
+			if v, _ := cmd.Flags().GetInt("chunk-timeout-ms"); v > 0 {
+				p.ChunkTimeoutMs = v
+			}
+			if v, _ := cmd.Flags().GetString("enterprise-url"); v != "" {
+				p.EnterpriseURL = v
+			}
+			if v, _ := cmd.Flags().GetBool("set-cache-key"); cmd.Flags().Changed("set-cache-key") {
+				p.SetCacheKey = v
+			}
+			if v, _ := cmd.Flags().GetString("api-package"); v != "" {
+				p.APIPackage = v
+			}
+			if v, _ := cmd.Flags().GetString("env-list"); v != "" {
+				p.EnvList = v
 			}
 
 			if err := d.UpsertProvider(p); err != nil {
@@ -170,6 +207,30 @@ Example:
 				existing.Status = st
 				changed = true
 			}
+			if en, _ := cmd.Flags().GetBool("enabled"); cmd.Flags().Changed("enabled") {
+				existing.Enabled = en; changed = true
+			}
+			if v, _ := cmd.Flags().GetInt("timeout-ms"); cmd.Flags().Changed("timeout-ms") {
+				existing.TimeoutMs = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetInt("header-timeout-ms"); cmd.Flags().Changed("header-timeout-ms") {
+				existing.HeaderTimeoutMs = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetInt("chunk-timeout-ms"); cmd.Flags().Changed("chunk-timeout-ms") {
+				existing.ChunkTimeoutMs = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetString("enterprise-url"); cmd.Flags().Changed("enterprise-url") {
+				existing.EnterpriseURL = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetBool("set-cache-key"); cmd.Flags().Changed("set-cache-key") {
+				existing.SetCacheKey = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetString("api-package"); cmd.Flags().Changed("api-package") {
+				existing.APIPackage = v; changed = true
+			}
+			if v, _ := cmd.Flags().GetString("env-list"); cmd.Flags().Changed("env-list") {
+				existing.EnvList = v; changed = true
+			}
 
 			if !changed {
 				return fmt.Errorf("no fields to update (specify at least one flag)")
@@ -206,15 +267,19 @@ Example:
 			}
 			defer d.Close()
 
-			if _, err := d.GetProvider(id); err != nil {
-				return fmt.Errorf("provider %q not found", id)
-			}
-			if err := d.DeleteProvider(id); err != nil {
-				return fmt.Errorf("db delete: %w", err)
-			}
-			fmt.Printf("Provider %s removed from database.\n", id)
+		prov, err := d.GetProvider(id)
+		if err != nil {
+			return fmt.Errorf("provider %q not found", id)
+		}
+		if err := d.DeleteProvider(id); err != nil {
+			return fmt.Errorf("db delete: %w", err)
+		}
+		if prov.Source == "seed" {
+			_ = d.SetPreference("seed_removed:"+id, "1")
+		}
+		fmt.Printf("Provider %s removed from database.\n", id)
 
-			return syncConfig(d)
+		return syncConfig(d)
 		},
 	}
 }
