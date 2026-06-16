@@ -9,15 +9,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
-	"github.com/opencodeco/okit/internal/classifier"
-	"github.com/opencodeco/okit/internal/db"
-	"github.com/opencodeco/okit/pkg/models"
+	"github.com/reeinharddd/okit/internal/classifier"
+	"github.com/reeinharddd/okit/internal/db"
+	"github.com/reeinharddd/okit/pkg/models"
 )
 
 // Server represents an MCP server.

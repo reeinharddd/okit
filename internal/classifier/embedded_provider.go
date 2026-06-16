@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/opencodeco/okit/internal/classifier/tokenizer"
-	"github.com/opencodeco/okit/pkg/onnx"
+	"github.com/reeinharddd/okit/internal/classifier/tokenizer"
+	"github.com/reeinharddd/okit/pkg/onnx"
 )
 
 //go:embed embedded/*
@@ -98,8 +98,7 @@ func (p *EmbeddedProvider) Classify(ctx context.Context, task Task, model Model)
 
 	// Run inference.
 	inputs := map[string][]float32{"input_ids": tokens}
-	outputs, err := p.model.Run(inputs)
-	if err != nil {
+	if _, err := p.model.Run(inputs); err != nil {
 		return ClassificationResult{}, fmt.Errorf("inference: %w", err)
 	}
 

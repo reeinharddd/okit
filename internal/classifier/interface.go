@@ -6,7 +6,14 @@
 
 package classifier
 
-import "context"
+import (
+	"context"
+	"github.com/reeinharddd/okit/internal/db"
+)
+
+// DBInterface is a type alias for the db package's DBInterface.
+// It provides the database operations needed by the classifier.
+type DBInterface = db.DBInterface
 
 // Classifier defines the interface for classifying user tasks.
 type Classifier interface {

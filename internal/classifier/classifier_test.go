@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opencodeco/okit/internal/classifier"
-	"github.com/opencodeco/okit/internal/db"
+	"github.com/reeinharddd/okit/internal/classifier"
+	"github.com/reeinharddd/okit/internal/db"
 	"github.com/stretchr/testify/assert"
 )
 
