@@ -3,33 +3,43 @@ package audit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/reeinharddd/okit/internal/db"
 	"github.com/reeinharddd/okit/pkg/models"
 )
 
-type fakeDB struct {
-	providers []models.Provider
-	models    map[string][]models.Model
-	upserted  []models.Model
-	failOn    map[string]bool
+var seededProviders = []string{"groq", "mistral", "nvidia", "cerebras", "openrouter", "github-models", "opencode-zen", "github-copilot"}
+
+func setupTestAuditDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	for _, id := range seededProviders {
+		d.DeleteProvider(id)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
 }
 
-func (f *fakeDB) ListProviders() ([]models.Provider, error) { return f.providers, nil }
-func (f *fakeDB) ListModelsByProvider(pid string) ([]models.Model, error) {
-	return f.models[pid], nil
-}
-func (f *fakeDB) UpsertModel(m *models.Model) error {
-	if f.failOn[m.ID] {
-		return fmt.Errorf("forced fail on %s", m.ID)
+func insertTestModel(t *testing.T, d *db.DB, m *models.Model) {
+	t.Helper()
+	if err := d.UpsertModel(m); err != nil {
+		t.Fatalf("insert model %s: %v", m.ID, err)
 	}
-	f.upserted = append(f.upserted, *m)
-	return nil
+}
+
+func insertTestProvider(t *testing.T, d *db.DB, p *models.Provider) {
+	t.Helper()
+	if err := d.UpsertProvider(p); err != nil {
+		t.Fatalf("insert provider %s: %v", p.ID, err)
+	}
 }
 
 func TestStripProviderPrefix(t *testing.T) {
@@ -75,8 +85,8 @@ func TestLive_FetchRealModels_GroqShape(t *testing.T) {
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
 
-	fdb := &fakeDB{}
-	l := NewLive(fdb, 1)
+	d := setupTestAuditDB(t)
+	l := NewLive(d, 1)
 	ids, err := l.FetchRealModels(context.Background(), prov)
 	if err != nil {
 		t.Fatalf("FetchRealModels: %v", err)
@@ -109,16 +119,13 @@ func TestLive_DiffProvider_IdentifiesPhantomAndMissing(t *testing.T) {
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
 
-	fdb := &fakeDB{
-		models: map[string][]models.Model{
-			"groq": {
-				{ID: "groq/llama-3.3-70b-versatile", ProviderID: "groq", DisplayName: "llama-3.3-70b-versatile", Status: "active"},
-				{ID: "groq/llama-3.1-8b-instant", ProviderID: "groq", DisplayName: "llama-3.1-8b-instant", Status: "active"},
-				{ID: "groq/compound", ProviderID: "groq", DisplayName: "compound", Status: "active"},
-			},
-		},
-	}
-	l := NewLive(fdb, 1)
+	d := setupTestAuditDB(t)
+	insertTestProvider(t, d, &models.Provider{ID: "groq", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY"})
+	insertTestModel(t, d, &models.Model{ID: "groq/llama-3.3-70b-versatile", ProviderID: "groq", DisplayName: "llama-3.3-70b-versatile", Status: "active"})
+	insertTestModel(t, d, &models.Model{ID: "groq/llama-3.1-8b-instant", ProviderID: "groq", DisplayName: "llama-3.1-8b-instant", Status: "active"})
+	insertTestModel(t, d, &models.Model{ID: "groq/compound", ProviderID: "groq", DisplayName: "compound", Status: "active"})
+
+	l := NewLive(d, 1)
 	res, err := l.DiffProvider(context.Background(), prov)
 	if err != nil {
 		t.Fatalf("DiffProvider: %v", err)
@@ -165,7 +172,8 @@ func TestLive_SmokeOne_OKAnd404(t *testing.T) {
 	prov := &models.Provider{
 		ID: "groq", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY",
 	}
-	l := NewLive(&fakeDB{}, 1)
+	d := setupTestAuditDB(t)
+	l := NewLive(d, 1)
 
 	okRes := l.SmokeOne(context.Background(), prov, "ok-model", "test")
 	if okRes.Status != "ok" {
@@ -203,19 +211,13 @@ func TestLive_FixAll_MarksPhantomsAndInsertsMissing(t *testing.T) {
 	os.Setenv("GROQ_API_KEY", "test-key")
 	defer os.Unsetenv("GROQ_API_KEY")
 
-	fdb := &fakeDB{
-		providers: []models.Provider{
-			{ID: "groq", Status: "active", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY"},
-		},
-		models: map[string][]models.Model{
-			"groq": {
-				{ID: "groq/llama-3.3-70b-versatile", ProviderID: "groq", DisplayName: "llama-3.3-70b-versatile", Status: "active"},
-				{ID: "groq/llama-3.1-8b-instant", ProviderID: "groq", DisplayName: "llama-3.1-8b-instant", Status: "active"},
-				{ID: "groq/old-deleted-model", ProviderID: "groq", DisplayName: "old-deleted-model", Status: "error"},
-			},
-		},
-	}
-	l := NewLive(fdb, 1)
+	d := setupTestAuditDB(t)
+	insertTestProvider(t, d, &models.Provider{ID: "groq", Status: "active", BaseURL: srv.URL, KeyEnv: "GROQ_API_KEY"})
+	insertTestModel(t, d, &models.Model{ID: "groq/llama-3.3-70b-versatile", ProviderID: "groq", DisplayName: "llama-3.3-70b-versatile", Status: "active"})
+	insertTestModel(t, d, &models.Model{ID: "groq/llama-3.1-8b-instant", ProviderID: "groq", DisplayName: "llama-3.1-8b-instant", Status: "active"})
+	insertTestModel(t, d, &models.Model{ID: "groq/old-deleted-model", ProviderID: "groq", DisplayName: "old-deleted-model", Status: "error"})
+
+	l := NewLive(d, 1)
 	reports, err := l.FixAll(context.Background())
 	if err != nil {
 		t.Fatalf("FixAll: %v", err)
@@ -236,33 +238,37 @@ func TestLive_FixAll_MarksPhantomsAndInsertsMissing(t *testing.T) {
 	if rep.Skipped != 1 {
 		t.Errorf("Skipped = %d, want 1 (whisper)", rep.Skipped)
 	}
-	phantomMarked := false
-	for _, u := range fdb.upserted {
-		if u.ID == "groq/llama-3.1-8b-instant" {
+
+	models, err := d.ListModelsByProvider("groq")
+	if err != nil {
+		t.Fatalf("ListModelsByProvider: %v", err)
+	}
+
+	var phantomMarked bool
+	for _, m := range models {
+		if m.ID == "groq/llama-3.1-8b-instant" {
 			phantomMarked = true
-			if u.Status != "error" {
-				t.Errorf("phantom status = %q, want error", u.Status)
+			if m.Status != "error" {
+				t.Errorf("phantom status = %q, want error", m.Status)
 			}
-			if !strings.Contains(u.ErrorMessage, "not_in_real_catalog") {
-				t.Errorf("phantom error_message = %q, want contains not_in_real_catalog", u.ErrorMessage)
+			if !strings.Contains(m.ErrorMessage, "not_in_real_catalog") {
+				t.Errorf("phantom error_message = %q, want contains not_in_real_catalog", m.ErrorMessage)
 			}
 		}
 	}
 	if !phantomMarked {
 		t.Errorf("expected phantom model to be upserted with error status")
 	}
-	alreadyErrorSkipped := true
-	for _, u := range fdb.upserted {
-		if u.ID == "groq/old-deleted-model" {
-			alreadyErrorSkipped = false
+
+	for _, m := range models {
+		if m.ID == "groq/old-deleted-model" && m.ErrorMessage != "" {
+			t.Errorf("already-error model should NOT be re-upserted, got error_msg=%q", m.ErrorMessage)
 		}
 	}
-	if !alreadyErrorSkipped {
-		t.Errorf("already-error model should NOT be re-upserted")
-	}
-	for _, u := range fdb.upserted {
-		if strings.HasPrefix(u.ID, "groq/groq/") {
-			t.Errorf("double-prefix detected: %s", u.ID)
+
+	for _, m := range models {
+		if strings.HasPrefix(m.ID, "groq/groq/") {
+			t.Errorf("double-prefix detected: %s", m.ID)
 		}
 	}
 }
