@@ -2,6 +2,7 @@
 
 ## Project
 Go CLI tool managing OpenCode configuration (cobra + SQLite + concurrent API calls).
+Vision: **auto-orchestrator** — manages models, skills, MCPs, agents, routing, and runtime config dynamically based on user's model arsenal and harness sources.
 
 ## Commands
 - `make test` — `go test -v ./...`
@@ -11,15 +12,44 @@ Go CLI tool managing OpenCode configuration (cobra + SQLite + concurrent API cal
 - `go tool cover -func=coverage.out`
 - `bash test-suite.sh` — integration tests
 
-## Workflow (Spec → Test → Implement → Verify → Ship)
+## Workflow: SDD-TDD Hybrid
 
-1. **Load context**: `mem_context` + `mem_search` for related work
-2. **Load skill**: `golang-testing` + `golang-patterns` + `tdd` for test/impl
-3. **TDD (vertical slices)**: ONE test → ONE impl → repeat. No bulk test writing.
-4. **Verify**: `go vet ./... && go test -race ./... && go build ./...`
-5. **Review**: `code-reviewer` skill via `reviewer` agent
-6. **Ship**: Conventional commits (`feat(db):`, `fix(routing):`, `test(heal):`, etc.)
-7. **Save**: `mem_session_summary` at session end
+**Phase 0 (Build Fix — one-time):** Systematic fix. interface → crud → 9 broken packages → stale tests.
+**Phases 1-6:** SDD for planning, TDD for coding.
+
+| Step | Action | Skills | Agent |
+|------|--------|--------|-------|
+| 1 | SDD Explore — load context, search memory, understand codebase | — | direct |
+| 2 | SDD Propose — define scope, intent, approach, affected areas | `golang-pro` | direct |
+| 3 | SDD Spec — requirements, capabilities, acceptance scenarios | — | direct |
+| 4 | SDD Design — interfaces, types, architecture decisions | `architecture-designer`, `golang-pro` | direct |
+| 5 | SDD Tasks — break into implementation tasks | — | direct |
+| 6 | SDD Apply + TDD — ONE test → ONE impl → repeat per task | `golang-pro`, `go-testing`, `tdd` | `coder` (>3 files) |
+| 7 | SDD Verify — `go vet ./... && go test -race ./... && go build ./...` | — | `devops` |
+| 8 | SDD Archive — save phase summary to Engram | — | direct |
+
+**TDD Rules (within Apply):**
+- NEVER write all tests first (horizontal slices anti-pattern)
+- ONE test → ONE impl → repeat (vertical slices via tracer bullets)
+- Test behavior through public interfaces, not implementation details
+- Only enough code to pass current test — no speculative features
+
+## Skills per Stage
+| Stage | Skills |
+|-------|--------|
+| Architecture/Design | `architecture-designer`, `golang-pro` |
+| Implementation | `golang-pro`, `go-testing`, `tdd` |
+| Review | `code-reviewer` |
+| Debug | `diagnose` |
+
+## Agents
+| Task | Agent | When |
+|------|-------|------|
+| Implementation | `coder` | >3 files changed |
+| Simple edits | direct | 1-2 files |
+| Code review | `reviewer` | Pre-merge |
+| Debugging | `debugger` | Test failures |
+| CI/config | `devops` | Pipeline work |
 
 ## Test Conventions
 - Table-driven tests with descriptive names (`TestFuncName_Scenario_Expected`)
@@ -27,28 +57,13 @@ Go CLI tool managing OpenCode configuration (cobra + SQLite + concurrent API cal
 - SQLite in-memory for DB tests: `db.Open(":memory:")`
 - Interface-based mocking (no framework)
 
-## Skills per Stage
-| Stage | Skills |
-|-------|--------|
-| Tests | `golang-testing`, `tdd` |
-| Impl | `golang-patterns`, `golang-pro` |
-| Review | `code-reviewer` |
-| Debug | `diagnose` |
-
-## Agents
-| Task | Agent |
-|------|-------|
-| Implementation | `coder` |
-| Code review | `reviewer` |
-| Debugging | `debugger` |
-| CI/config | `devops` |
-| Quick lookup | `explore` |
-
 ## Stale Tests
-3 stale `_test.go` files block `go test ./...`. See [STALE_TESTS.md](./STALE_TESTS.md).
+All stale test files have been removed. The test suite passes cleanly.
 
 ## Memory
-Save to engram with `topic_key: architecture/dev-workflow` or `handoff/<feature>`.
+Save to engram with `topic_key: architecture/okit-workflow` or `architecture/okit-<feature>`.
+Phase completions always saved as `sessions/okit-phase-<N>-complete`.
 
 ## Full Reference
 See [DEVELOPMENT.md](./DEVELOPMENT.md) for the complete workflow specification.
+See [HANDOFF.md](./HANDOFF.md) for the 6-phase implementation plan.

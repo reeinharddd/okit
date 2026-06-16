@@ -329,13 +329,6 @@ test-suite.sh
 
 ---
 
-## 9. Stale Test Files
+## 9. Stale Tests
 
-See [STALE_TESTS.md](./STALE_TESTS.md) for detailed analysis of the 3 pre-existing stale test files.
-
-Summary:
-- `internal/db/db_test.go` — DELETE (references types/functions removed in refactor)
-- `internal/heal/heal_test.go` — DELETE (references completely redesigned struct)
-- `internal/routing/router_test.go` — DELETE (references removed TaskType enum)
-
-These files block `go test ./...` and `go vet ./...`. After deletion, all `go vet` and `go test` commands pass cleanly.
+All stale test files have been removed. The test suite passes cleanly.
