@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/reeinharddd/okit/internal/classifier"
-	"github.com/reeinharddd/okit/internal/db"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -96,11 +95,8 @@ func TestModelSelector(t *testing.T) {
 			}
 		_ = registry.Register(provider)
 
-		// Mock DBInterface.
-		db := &db.MockDB{}
-
 		// Create the ModelSelector.
-		selector := classifier.NewModelSelector(registry, db)
+		selector := classifier.NewModelSelector(registry)
 
 		// Select the best model.
 		task := classifier.Task{ID: "task1", Input: "test input", SessionID: "session1", CreatedAt: time.Now()}
@@ -122,11 +118,8 @@ func TestModelSelector(t *testing.T) {
 			}
 		_ = registry.Register(provider)
 
-		// Mock DBInterface.
-		db := &db.MockDB{}
-
 		// Create the ModelSelector.
-		selector := classifier.NewModelSelector(registry, db)
+		selector := classifier.NewModelSelector(registry)
 
 		// Select the best model.
 		task := classifier.Task{ID: "task1", Input: "test input", SessionID: "session1", CreatedAt: time.Now()}
@@ -145,11 +138,8 @@ func TestModelSelector(t *testing.T) {
 			}
 		_ = registry.Register(provider)
 
-		// Mock DBInterface.
-		db := &db.MockDB{}
-
 		// Create the ModelSelector.
-		selector := classifier.NewModelSelector(registry, db)
+		selector := classifier.NewModelSelector(registry)
 
 		// Select the best model.
 		task := classifier.Task{ID: "task1", Input: "test input", SessionID: "session1", CreatedAt: time.Now()}
